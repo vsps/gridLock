@@ -8,14 +8,14 @@ import 'dart:math' as math;
 class PentatonicMap {
   PentatonicMap._();
 
-  /// Root note: A3.
-  static const double _baseFreq = 220.0;
+  /// Root note: C2 (≈ 65.41 Hz).
+  static const double _baseFreq = 65.41;
 
   /// Semitone offsets of a major pentatonic scale from the root.
   static const List<int> _intervals = [0, 2, 4, 7, 9];
 
   /// Fixed stride for cell indexing. Must be >= the maximum supported columns.
-  static const int columnStride = 8;
+  static const int columnStride = 4;
 
   /// Frequency in Hz for the pad at ([row], [col]).
   static double frequency(int row, int col) {
@@ -24,5 +24,10 @@ class PentatonicMap {
     final octaveShift = cellIndex ~/ _intervals.length;
     final semitones = _intervals[noteIndex] + octaveShift * 12;
     return _baseFreq * math.pow(2, semitones / 12.0);
+  }
+
+  /// Whether the cell is a root note (C) in the pentatonic scale.
+  static bool isRoot(int row, int col) {
+    return (row * columnStride + col) % _intervals.length == 0;
   }
 }

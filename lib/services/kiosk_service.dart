@@ -1,29 +1,47 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 /// Dart wrapper over the Android kiosk platform channel.
 ///
 /// All calls fail soft: on a non-Android target or an unimplemented method they
 /// no-op rather than throw, so the app still runs (e.g. in a desktop preview).
-class KioskService {
+///
+/// Exposes [isLocked] so the UI can react when screen pinning is exited
+/// (e.g. Back + Recents held by a parent).
+class KioskService extends ChangeNotifier {
+  KioskService() {
+    _channel.setMethodCallHandler(_onPlatformCall);
+  }
+
   static const MethodChannel _channel =
       MethodChannel('com.example.gridlock/kiosk');
 
-  Future<void> startLock() => _invoke('startLock');
+  bool _locked = false;
+  bool get isLocked => _locked;
 
-  Future<void> stopLock() => _invoke('stopLock');
+  Future<void> startLock() async {
+    await _invoke('startLock');
+    _locked = true;
+    notifyListeners();
+  }
+
+  Future<void> stopLock() async {
+    await _invoke('stopLock');
+    _locked = false;
+    notifyListeners();
+  }
 
   Future<void> enableImmersiveMode() => _invoke('enableImmersive');
 
   Future<void> keepScreenOn(bool on) => _invoke('keepScreenOn', {'on': on});
 
-  Future<bool> isDeviceOwner() async {
-    try {
-      final result = await _channel.invokeMethod<bool>('isDeviceOwner');
-      return result ?? false;
-    } on PlatformException {
-      return false;
-    } on MissingPluginException {
-      return false;
+  // ---- platform → Dart -------------------------------------------------------
+
+  Future<void> _onPlatformCall(MethodCall call) async {
+    switch (call.method) {
+      case 'onLockExited':
+        _locked = false;
+        notifyListeners();
     }
   }
 

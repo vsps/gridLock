@@ -1,24 +1,35 @@
 # gridLock
 
-An interactive grid-style sample player for Android — a children's toy. Colourful pads
-play pentatonic tones and send a visual ripple wave to neighbouring pads. The app runs as
-a locked-down kiosk; a secret two-finger gesture unlocks parent settings.
+An interactive grid-style sample player for Android — a children's toy. Black pads
+play sounds with a red→green ripple animation. The app runs as a locked-down kiosk;
+a secret two-finger gesture unlocks parent settings. When screen pinning is exited,
+a **Setup** button appears for 5 seconds.
 
 ## Overview
 
-- **Grid**: configurable 3×3 … 8×8 (default 4×4), set in settings.
-- **Audio**: pentatonic tones synthesised in pure Dart (no asset files), played with low
-  latency via `soundpool`.
-- **Ripple**: tapping a pad flashes it and ripples outward (visual only — no neighbour
-  sound).
-- **Kiosk**: Device Owner + Lock Task Mode (truly unescapable once provisioned),
-  immersive fullscreen, screen kept on.
+- **Grid**: configurable 3×3 … 8×8 (default 5×4), set in settings.
+- **Visual**: black pads with a 1 px dark-gray border. Tapping triggers a red→green
+  colour gradient ripple that fades back to black.
+- **Audio modes**:
+  - **Synth** (default): pentatonic tones synthesised in pure Dart, played with low
+    latency via the `flutter_soloud` engine.
+  - **Samples**: user-provided WAV files from `assets/samples/`, mapped to grid cells
+    by row/column (`sample_0_0.wav`, etc.).
+  - **Record**: long-press a pad to record a 1-second loop; tap to play it back.
+- **Ripple**: tapping a pad starts a red→green colour wave that spreads outward
+  from the tapped cell.
+- **Kiosk**: screen pinning (Lock Task Mode without Device Owner — escapable by
+  holding Back + Recents), immersive fullscreen, screen kept on.
+- **Setup button**: when pinning is exited (Back + Recents), a semi-transparent
+  **Setup** button appears in the top-right corner for 5 seconds, giving quick
+  access to the mode/grid settings.
 - **Unlock**: long-press the **top-left** and **bottom-right** corners together for 1.5s,
   then slide the top-left finger **right** and the bottom-right finger **left** (each
   ≥ 40% of screen width).
 
-**Stack**: Flutter 3.19+ / Dart 3.3+, `provider` for state, `soundpool` for playback,
-Kotlin platform glue for the kiosk lock. Targets Android API 21+.
+**Stack**: Flutter 3.19+ / Dart 3.3+, `provider` for state, `flutter_soloud` for playback,
+`record` for microphone capture, Kotlin platform glue for screen pinning.
+Targets Android API 21+.
 
 ---
 
@@ -31,15 +42,16 @@ scaffold. The generated `android/` directory is **not** committed (it is git-ign
 
 ```
 lib/
-  audio/      tone synthesis + soundpool playback
+  audio/      tone synthesis, sample loading, recording, audio playback
   gestures/   unlock gesture state machine
-  grid/       grid state, pentatonic pitch map, ripple BFS
-  models/     grid settings
+  grid/       grid state (colour ripple animation), pentatonic pitch map, ripple BFS
+  models/     grid settings + sound-source mode enum
   screens/    play + settings screens
-  services/   kiosk (Lock Task Mode) bridge
+  services/   kiosk (Lock Task Mode) bridge with unpin detection
   widgets/    grid view, pad, multi-touch listener
 test/         unit tests for WAV, ripple, unlock FSM
-tools/android_overlay/   kiosk-specific Android source (overlaid onto the scaffold)
+assets/samples/    drop WAV files here for sample mode
+tools/android_overlay/   kiosk-specific Android source + full manifest (overlaid onto scaffold)
 ```
 
 ---
@@ -56,7 +68,7 @@ tools/android_overlay/   kiosk-specific Android source (overlaid onto the scaffo
 only the `android/` folder back:
 
 ```bash
-# from the repo root (c:\Users\piotr\dev\gridLock)
+# from the repo root
 flutter create --org com.example --project-name gridlock --platforms android /tmp/gl_scaffold
 cp -r /tmp/gl_scaffold/android ./android
 ```
@@ -68,8 +80,7 @@ flutter create --org com.example --project-name gridlock --platforms android "$e
 Copy-Item "$env:TEMP\gl_scaffold\android" ".\android" -Recurse -Force
 ```
 
-This must yield package `com.example.gridlock` (matches the platform channel and the
-provisioning command below).
+This must yield package `com.example.gridlock` (matches the platform channel).
 
 ### 2. Overlay the kiosk Android files
 
@@ -77,40 +88,17 @@ provisioning command below).
 cp -r tools/android_overlay/app ./android/app
 ```
 
-This adds `AppDeviceAdminReceiver.kt`, `res/xml/device_admin.xml`, and replaces the default
-`MainActivity.kt` with the kiosk version.
+This replaces the default `MainActivity.kt` with the kiosk version (including the
+unpin-detection callback) and overlays a pre-configured `AndroidManifest.xml` that
+already includes `RECORD_AUDIO` permission, `launchMode="singleInstance"`, and
+`keepScreenOn="true"`.
 
-### 3. Edit `android/app/src/main/AndroidManifest.xml`
+### 3. Set `minSdkVersion` to 21
 
-In the `<activity android:name=".MainActivity" ...>` tag, set:
-
-```xml
-android:launchMode="singleInstance"
-android:keepScreenOn="true"
-```
-
-Add this `<receiver>` inside `<application>` (sibling of `<activity>`):
-
-```xml
-<receiver
-    android:name=".AppDeviceAdminReceiver"
-    android:permission="android.permission.BIND_DEVICE_ADMIN"
-    android:exported="true">
-    <meta-data
-        android:name="android.app.device_admin"
-        android:resource="@xml/device_admin" />
-    <intent-filter>
-        <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
-    </intent-filter>
-</receiver>
-```
-
-### 4. Set `minSdkVersion` to 21
-
-In `android/app/build.gradle` (or `build.gradle.kts`), set the min SDK to `21` (replace
+In `android/app/build.gradle.kts`, set the min SDK to `21` (replace
 `flutter.minSdkVersion` if present).
 
-### 5. Install deps, analyse, test, run
+### 4. Install deps, analyse, test, run
 
 ```bash
 flutter pub get
@@ -121,20 +109,48 @@ flutter run            # on a connected device/emulator
 
 ---
 
-## Provisioning the kiosk lock (one-time, per device)
+## Sound modes
 
-True lockdown requires the app to be **Device Owner**, which can only be set on a device
-with **no accounts** (fresh or factory-reset), via ADB:
+Toggle modes in **Setup** → **Sound Source**.
 
-```bash
-adb shell dpm set-device-owner com.example.gridlock/.AppDeviceAdminReceiver
-```
+### Synth (default)
 
-- Once set, Lock Task Mode blocks Home, Recents, Back-escape and the notification shade.
-- If this step is **skipped**, `startLockTask()` falls back to ordinary screen pinning
-  (escapable by holding Back + Recents). The settings screen shows a warning banner in that
-  case.
-- To undo: factory reset, or have the app call `clearDeviceOwnerApp` (not wired to UI).
+Pentatonic tones synthesised at boot. No configuration needed.
+
+### Samples
+
+Drop mono 16-bit PCM WAV files into `assets/samples/` named `sample_R_C.wav`
+(e.g. `sample_0_0.wav`, `sample_2_3.wav`). Missing files are silently skipped —
+those pads will be silent in sample mode.
+
+### Record
+
+Long-press any pad to record a 1-second audio loop (requires microphone permission).
+The pad turns red while recording. After recording, tap the pad to play back the loop.
+Pads with existing recordings show a subtly lighter tint.
+
+> The `record` package requests microphone permission at runtime. Android's
+> `RECORD_AUDIO` permission is declared in the overlay manifest.
+
+---
+
+## Kiosk lock behaviour
+
+The app calls `startLockTask()` on boot, which enters **screen pinning**:
+
+- Android shows a one-time system confirmation when pinning starts.
+- Pinning hides Home/Recents and blocks the notification shade, but remains
+  **escapable** by holding Back + Recents — by design, this is not an unescapable
+  lockdown.
+- When pinning is exited, the app detects it via `onLockTaskModeExiting` and
+  shows a **Setup** button (top-right) for 5 seconds. Tapping it opens the
+  settings screen without needing the two-finger gesture.
+- The unlock gesture opens settings (which calls `stopLockTask()`); returning to
+  play mode re-pins.
+
+> Want truly unescapable lockdown? That requires provisioning the app as Device
+> Owner (`adb shell dpm set-device-owner …`) on an account-free device. That path
+> has been removed from this build in favour of plain screen pinning.
 
 ---
 
@@ -142,20 +158,25 @@ adb shell dpm set-device-owner com.example.gridlock/.AppDeviceAdminReceiver
 
 | Concern | Implementation |
 | --- | --- |
-| Tone synthesis | [lib/audio/tone_generator.dart](lib/audio/tone_generator.dart) — sine WAV bytes with fade envelope |
+| Tone synthesis | [lib/audio/tone_generator.dart](lib/audio/tone_generator.dart) — sine + 2nd/3rd harmonics, vibrato, ADSR envelope, rendered to WAV bytes |
 | Pitch per pad | [lib/grid/pentatonic_map.dart](lib/grid/pentatonic_map.dart) — A3 pentatonic, fixed column stride so pitch is stable across grid sizes |
-| Playback | [lib/audio/audio_service.dart](lib/audio/audio_service.dart) — soundpool, all tones pre-loaded at boot |
-| Ripple | [lib/grid/ripple_controller.dart](lib/grid/ripple_controller.dart) — BFS emits `(row, col, wave)`; `wave × 150ms` staggered flash |
+| Playback | [lib/audio/audio_service.dart](lib/audio/audio_service.dart) — flutter_soloud, all tones pre-loaded; dispatches synth/samples/recordings by mode |
+| Sample loading | [lib/audio/audio_service.dart](lib/audio/audio_service.dart) — loads WAVs from `assets/samples/sample_R_C.wav` |
+| Recording | [lib/audio/record_service.dart](lib/audio/record_service.dart) — `record` package, 1 s mono WAV capture |
+| Ripple | [lib/grid/grid_state.dart](lib/grid/grid_state.dart) — time-based colour interpolation (red→green→dark) with staggered BFS wave |
 | Unlock gesture | [lib/gestures/unlock_gesture_fsm.dart](lib/gestures/unlock_gesture_fsm.dart) — pure-Dart state machine, swipe origin captured after the hold so drift doesn't count |
 | Multi-touch input | [lib/widgets/kiosk_listener.dart](lib/widgets/kiosk_listener.dart) — opaque `Listener` + monotonic clock + periodic tick |
-| Kiosk control | [tools/android_overlay/.../MainActivity.kt](tools/android_overlay/app/src/main/kotlin/com/example/gridlock/MainActivity.kt) ↔ [lib/services/kiosk_service.dart](lib/services/kiosk_service.dart) |
+| Screen pinning | [tools/android_overlay/.../MainActivity.kt](tools/android_overlay/app/src/main/kotlin/com/example/gridlock/MainActivity.kt) ↔ [lib/services/kiosk_service.dart](lib/services/kiosk_service.dart) — `startLockTask()` / `stopLockTask()` + unpin detection via `onLockTaskModeExiting` |
 
 ---
 
 ## Verification
 
+- **Static analysis** (`flutter analyze`): passes with no issues.
 - **Unit tests** (`flutter test`): WAV header correctness, ripple BFS wave depths, and the
   unlock FSM (including the drift-does-not-count case).
-- **On a provisioned device**: confirm Home/Recents/Back do nothing and the notification
-  shade won't open; perform the unlock gesture → settings opens; re-lock restores the lock.
-- **Audio latency**: hammer multiple pads quickly — soundpool overlaps tones without lag.
+- **On a device**: confirm the screen-pin prompt, then that Home/Recents and the
+  notification shade are blocked (Back + Recents still escapes pinning); after escaping,
+  the **Setup** button appears for 5 s; the unlock gesture also opens settings; returning
+  re-pins.
+- **Audio latency**: hammer multiple pads quickly — SoLoud overlaps voices without lag.

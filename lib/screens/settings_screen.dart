@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../audio/audio_service.dart';
 import '../models/grid_settings.dart';
 import '../services/kiosk_service.dart';
 
-/// Parent settings, reachable only after the unlock gesture. Popping this
-/// screen returns to play mode and re-locks (handled by [PlayScreen]).
+/// Parent settings, reachable only after the unlock gesture or the 5-second
+/// setup button. Toggle audio source modes, adjust grid dimensions, or exit.
+/// Popping this screen returns to play mode and re-locks (handled by
+/// [PlayScreen]).
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
 
@@ -15,39 +18,63 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  bool? _deviceOwner;
-
-  @override
-  void initState() {
-    super.initState();
-    context.read<KioskService>().isDeviceOwner().then((value) {
-      if (mounted) setState(() => _deviceOwner = value);
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     final settings = context.watch<GridSettings>();
+    final audio = context.read<AudioService>();
+    final kiosk = context.read<KioskService>();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(title: const Text('Setup')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          if (_deviceOwner == false)
-            Card(
-              color: Colors.orange.shade100,
-              child: const Padding(
-                padding: EdgeInsets.all(12),
-                child: Text(
-                  'Not provisioned as Device Owner — the kiosk lock is '
-                  'escapable (hold Back + Recents). See the README for the '
-                  'one-time ADB setup to make it unescapable.',
-                  style: TextStyle(color: Colors.black87),
-                ),
+          // ---- info card ------------------------------------------------------
+          Card(
+            color: Colors.blue.shade100,
+            child: const Padding(
+              padding: EdgeInsets.all(12),
+              child: Text(
+                'Screen pinning hides Home/Recents and blocks the '
+                'notification shade. When unpinned, or when Record '
+                'mode is active, the Setup button stays visible for '
+                'quick access.',
+                style: TextStyle(color: Colors.black87),
               ),
             ),
+          ),
+          const SizedBox(height: 16),
+
+          // ---- sound source ---------------------------------------------------
+          Text('Sound Source',
+              style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
+          SegmentedButton<SoundSource>(
+            showSelectedIcon: false,
+            segments: const [
+              ButtonSegment(value: SoundSource.synth, label: Text('Synth')),
+              ButtonSegment(
+                  value: SoundSource.samples, label: Text('Samples')),
+              ButtonSegment(
+                  value: SoundSource.record, label: Text('Record')),
+              ButtonSegment(
+                  value: SoundSource.playback, label: Text('Play')),
+            ],
+            selected: {settings.soundSource},
+            onSelectionChanged: (sel) async {
+              final src = sel.first;
+              settings.setSoundSource(src);
+              audio.setMode(src.name);
+
+              if (src == SoundSource.samples) {
+                await audio.loadSamples(settings.rows, settings.cols);
+              }
+            },
+          ),
+          const SizedBox(height: 20),
+
+          // ---- grid dimensions ------------------------------------------------
+          Text('Grid', style: Theme.of(context).textTheme.titleMedium),
           _DimensionSlider(
             label: 'Rows',
             value: settings.rows,
@@ -59,6 +86,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onChanged: settings.setCols,
           ),
           const SizedBox(height: 24),
+
+          // ---- actions --------------------------------------------------------
           FilledButton.icon(
             icon: const Icon(Icons.lock),
             label: const Text('Re-lock (return to play)'),
@@ -69,7 +98,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             icon: const Icon(Icons.exit_to_app),
             label: const Text('Exit app'),
             onPressed: () async {
-              await context.read<KioskService>().stopLock();
+              await kiosk.stopLock();
               await SystemNavigator.pop();
             },
           ),

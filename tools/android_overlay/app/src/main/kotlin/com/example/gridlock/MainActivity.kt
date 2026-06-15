@@ -1,7 +1,5 @@
 package com.example.gridlock
 
-import android.app.admin.DevicePolicyManager
-import android.content.Context
 import android.os.Build
 import android.view.View
 import android.view.WindowInsets
@@ -13,41 +11,38 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
     private val channelName = "com.example.gridlock/kiosk"
-
-    private val dpm: DevicePolicyManager
-        get() = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-
-    private fun isDeviceOwner(): Boolean = dpm.isDeviceOwnerApp(packageName)
+    private var channel: MethodChannel? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
-            .setMethodCallHandler { call, result ->
-                when (call.method) {
-                    "startLock" -> { startLock(); result.success(null) }
-                    "stopLock" -> { stopLock(); result.success(null) }
-                    "enableImmersive" -> { enableImmersive(); result.success(null) }
-                    "keepScreenOn" -> {
-                        val on = call.argument<Boolean>("on") ?: true
-                        setKeepScreenOn(on); result.success(null)
-                    }
-                    "isDeviceOwner" -> result.success(isDeviceOwner())
-                    else -> result.notImplemented()
+        channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
+        channel?.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "startLock" -> { startLock(); result.success(null) }
+                "stopLock" -> { stopLock(); result.success(null) }
+                "enableImmersive" -> { enableImmersive(); result.success(null) }
+                "keepScreenOn" -> {
+                    val on = call.argument<Boolean>("on") ?: true
+                    setKeepScreenOn(on); result.success(null)
                 }
+                else -> result.notImplemented()
             }
+        }
+    }
+
+    override fun onLockTaskModeExiting() {
+        super.onLockTaskModeExiting()
+        // Notify Flutter that screen pinning was exited (e.g. Back + Recents).
+        channel?.invokeMethod("onLockExited", null)
     }
 
     private fun startLock() {
-        if (isDeviceOwner()) {
-            // Whitelist this app so startLockTask() enters lock task mode without
-            // the user-escapable "screen pinning" confirmation.
-            val admin = AppDeviceAdminReceiver.componentName(this)
-            dpm.setLockTaskPackages(admin, arrayOf(packageName))
-        }
+        // Ordinary screen pinning: with no Device Owner, startLockTask() shows
+        // the system pin confirmation and stays escapable (hold Back + Recents).
         try {
             startLockTask()
         } catch (e: IllegalStateException) {
-            // Already locked, or not permitted on this device — ignore.
+            // Already pinned, or not permitted on this device — ignore.
         }
     }
 
@@ -55,7 +50,7 @@ class MainActivity : FlutterActivity() {
         try {
             stopLockTask()
         } catch (e: IllegalStateException) {
-            // Not currently in a lock task — ignore.
+            // Not currently pinned — ignore.
         }
     }
 
