@@ -19,7 +19,7 @@ class GridViewWidget extends StatelessWidget {
     final cols = settings.cols;
 
     return Padding(
-      padding: const EdgeInsets.only(left: 8, right: 8, top: 56, bottom: 32),
+      padding: const EdgeInsets.only(left: 8, right: 8, top: 56, bottom: 56),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final cellWidth = constraints.maxWidth / cols;
