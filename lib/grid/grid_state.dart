@@ -2,95 +2,193 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import 'ripple_controller.dart';
-
-/// Tracks the colour ripple animation across grid cells and per-swipe
-/// deduplication so a sliding finger triggers each pad at most once.
+/// Tracks per-cell energy (0-100 %) that decays over time and ripples outward
+/// when a pad hits 100 %.
+///
+/// Pressing a pad adds 25 %. When energy reaches 100 % the pad resets to 0 %
+/// and fires a propagation: cardinal neighbours +50 %, their neighbours +25 %.
+/// If a neighbour hits 100 % from propagation it cascades.
+///
+/// A fast visual flash wave sweeps across **all** cells on every trigger
+/// (staggered by Manhattan distance) so the user sees a wave even though
+/// only neighbours receive energy.
 class GridState extends ChangeNotifier {
   GridState() : _clock = Stopwatch()..start();
 
-  // Layout stride (large enough for unique cell keys across all grid sizes).
+  // Layout stride for unique cell keys.
   static const int _stride = 8;
 
-  // Animation timing (milliseconds).
-  static const int _staggerMs = 60;
-  static const int _redMs = 120;
-  static const int _transitionMs = 180;
-  static const int _fadeMs = 300;
-  static const int _totalMs = _redMs + _transitionMs + _fadeMs;
+  // ---- tunables --------------------------------------------------------------
 
-  // Off-state colour (matches the scaffold background).
-  static const Color _offColor = Color(0xFF101018);
+  /// Decay rate: fraction of full energy lost per millisecond (100 % in 1.5 s).
+  static const double _decayPerMs = 1.0 / 1500.0;
 
-  /// Cell key → wall-clock activation time (ms).
-  final Map<int, int> _activations = {};
+  static const double _pressBoost = 0.25;
+  static const double _primaryBoost = 0.50;
+  static const double _secondaryBoost = 0.25;
+
+  /// Flash wave: stagger per Manhattan-distance step and total flash duration.
+  static const int _flashStaggerMs = 25;
+  static const int _flashDurationMs = 350;
+
+  static const List<List<int>> _deltas = [
+    [-1, 0],
+    [1, 0],
+    [0, -1],
+    [0, 1],
+  ];
+
+  // ---- state -----------------------------------------------------------------
+
+  final Map<int, double> _energy = {};
+
+  /// Flash animation: cell key → wall-clock start time (ms).
+  final Map<int, int> _flashStart = {};
 
   final Stopwatch _clock;
   Timer? _ticker;
+  int _lastTickMs = 0;
 
   int _key(int row, int col) => row * _stride + col;
   int get _now => _clock.elapsedMilliseconds;
 
-  // ----- swipe-slide tracking --------------------------------------------------
+  // ---- public API ------------------------------------------------------------
 
-  // Last cell the pointer triggered during the current slide. Dedup is against
-  // only this cell (not the whole swipe) so dragging back over a pad re-fires
-  // it, while jitter within one cell does not retrigger.
-  int _lastCellKey = -1;
+  /// Current energy for the cell, 0.0 – 1.0.
+  double cellEnergy(int row, int col) =>
+      (_energy[_key(row, col)] ?? 0.0).clamp(0.0, 1.0);
 
-  /// Call on every new pointer-down to start a fresh slide gesture.
-  void beginSwipe() {
-    _lastCellKey = -1;
+  /// Flash colour for the cell, or null when no flash is active.
+  Color? flashColor(int row, int col) {
+    final start = _flashStart[_key(row, col)];
+    if (start == null) return null;
+    final elapsed = _now - start;
+    if (elapsed < 0 || elapsed > _flashDurationMs) return null;
+    if (elapsed < 80) return Colors.red;
+    final t = (elapsed - 80) / (_flashDurationMs - 80);
+    return Color.lerp(Colors.red, const Color(0x00000000), t);
   }
 
-  /// Returns true when the pointer has entered a different cell than the one it
-  /// last triggered, marking the new cell as current.
-  bool tryEnterCell(int row, int col) {
-    final k = _key(row, col);
-    if (k == _lastCellKey) return false;
-    _lastCellKey = k;
-    return true;
-  }
-
-  // ----- ripple API ------------------------------------------------------------
-
-  /// Starts a ripple centred on ([row], [col]) across a [rows]×[cols] grid.
-  void triggerRipple(int row, int col, int rows, int cols) {
-    _activations.clear();
-    final now = _now;
-    RippleController.propagate(row, col, rows, cols, (r, c, wave) {
-      _activations[_key(r, c)] = now + wave * _staggerMs;
-    });
+  /// Adds [_pressBoost] energy to the pad at ([row], [col]). If the pad
+  /// reaches 100 % it triggers a ripple propagation across the given grid.
+  void addEnergy(int row, int col, int rows, int cols) {
+    _applyBoost(row, col, _pressBoost, rows, cols);
     _ensureTicker();
     notifyListeners();
   }
 
-  /// Returns the ripple colour for the given cell, or `null` when idle.
-  Color? cellColor(int row, int col) {
-    final activation = _activations[_key(row, col)];
-    if (activation == null) return null;
-    final elapsed = _now - activation;
-    if (elapsed < 0 || elapsed > _totalMs) return null;
+  /// Slide-aware claim — prevents re-triggering from jitter within one cell
+  /// while allowing a pad to fire again once the finger leaves and returns.
+  int _lastPadKey = -1;
 
-    if (elapsed < _redMs) {
-      return Colors.red;
-    } else if (elapsed < _redMs + _transitionMs) {
-      final t = (elapsed - _redMs) / _transitionMs;
-      return Color.lerp(Colors.red, Colors.green, t)!;
+  void beginSwipe() {
+    _lastPadKey = -1;
+  }
+
+  bool tryClaimPad(int row, int col) {
+    final k = _key(row, col);
+    if (k == _lastPadKey) return false;
+    _lastPadKey = k;
+    return true;
+  }
+
+  // ---- internal --------------------------------------------------------------
+
+  void _applyBoost(int row, int col, double boost, int rows, int cols) {
+    final k = _key(row, col);
+    final old = _energy[k] ?? 0.0;
+    final neu = (old + boost).clamp(0.0, 1.0);
+
+    if (neu >= 1.0 && old < 1.0) {
+      _energy[k] = 0.0;
+      _startFlashWave(row, col, rows, cols);
+      _propagateEnergy(row, col, rows, cols);
     } else {
-      final t = (elapsed - _redMs - _transitionMs) / _fadeMs;
-      return Color.lerp(Colors.green, _offColor, t)!;
+      _energy[k] = neu;
     }
   }
 
-  // ----- internal --------------------------------------------------------------
+  /// Visual flash BFS across **all** cells.
+  void _startFlashWave(int startRow, int startCol, int rows, int cols) {
+    final now = _now;
+    final visited = <int>{};
+    final queue = <List<int>>[];
+
+    visited.add(_key(startRow, startCol));
+    queue.add([startRow, startCol, 0]);
+
+    var head = 0;
+    while (head < queue.length) {
+      final cur = queue[head++];
+      final r = cur[0];
+      final c = cur[1];
+      final wave = cur[2];
+      _flashStart[_key(r, c)] = now + wave * _flashStaggerMs;
+
+      for (final d in _deltas) {
+        final nr = r + d[0];
+        final nc = c + d[1];
+        if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+        final nk = _key(nr, nc);
+        if (visited.add(nk)) {
+          queue.add([nr, nc, wave + 1]);
+        }
+      }
+    }
+  }
+
+  /// Energy propagation: neighbours +50 %, their neighbours +25 %.
+  void _propagateEnergy(int startRow, int startCol, int rows, int cols) {
+    final visited = <int>{_key(startRow, startCol)};
+    final wave1 = <int>[];
+
+    for (final d in _deltas) {
+      final nr = startRow + d[0];
+      final nc = startCol + d[1];
+      if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+      final nk = _key(nr, nc);
+      if (visited.add(nk)) wave1.add(nk);
+    }
+
+    for (final nk in wave1) {
+      final r = nk ~/ _stride;
+      final c = nk % _stride;
+      _applyBoost(r, c, _primaryBoost, rows, cols);
+    }
+
+    for (final nk in wave1) {
+      final r = nk ~/ _stride;
+      final c = nk % _stride;
+      for (final d in _deltas) {
+        final nr = r + d[0];
+        final nc = c + d[1];
+        if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+        final nnk = _key(nr, nc);
+        if (visited.add(nnk)) {
+          _applyBoost(nr, nc, _secondaryBoost, rows, cols);
+        }
+      }
+    }
+  }
+
+  // ---- ticker ----------------------------------------------------------------
 
   void _ensureTicker() {
+    _lastTickMs = _clock.elapsedMilliseconds;
     _ticker?.cancel();
     _ticker = Timer.periodic(const Duration(milliseconds: 16), (_) {
-      _activations.removeWhere((_, t) => _now - t > _totalMs + 200);
+      final now = _clock.elapsedMilliseconds;
+      final elapsed = now - _lastTickMs;
+      _lastTickMs = now;
+
+      final decay = _decayPerMs * elapsed;
+      _energy.updateAll((_, v) => (v - decay).clamp(0.0, 1.0));
+      _energy.removeWhere((_, v) => v == 0.0);
+
+      _flashStart.removeWhere((_, t) => now - t > _flashDurationMs + 100);
+
       notifyListeners();
-      if (_activations.isEmpty) {
+      if (_energy.isEmpty && _flashStart.isEmpty) {
         _ticker?.cancel();
         _ticker = null;
       }

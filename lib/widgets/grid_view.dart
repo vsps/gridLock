@@ -51,12 +51,12 @@ class GridViewWidget extends StatelessWidget {
               final r = _row(e.localPosition.dy, cellHeight, rows);
               final grid = context.read<GridState>();
               grid.beginSwipe();
-              if (grid.tryEnterCell(r, c)) _activate(context, r, c, rows, cols);
+              _activate(context, r, c, rows, cols);
             },
             onPointerMove: (e) {
               final c = _col(e.localPosition.dx, cellWidth, cols);
               final r = _row(e.localPosition.dy, cellHeight, rows);
-              if (context.read<GridState>().tryEnterCell(r, c)) {
+              if (context.read<GridState>().tryClaimPad(r, c)) {
                 _activate(context, r, c, rows, cols);
               }
             },
@@ -76,6 +76,6 @@ class GridViewWidget extends StatelessWidget {
   static void _activate(
       BuildContext context, int r, int c, int rows, int cols) {
     context.read<AudioService>().play(r, c);
-    context.read<GridState>().triggerRipple(r, c, rows, cols);
+    context.read<GridState>().addEnergy(r, c, rows, cols);
   }
 }

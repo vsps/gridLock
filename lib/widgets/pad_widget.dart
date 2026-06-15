@@ -13,11 +13,15 @@ import '../models/grid_settings.dart';
 /// A single pad in the grid.
 ///
 /// In non-record modes the pad is purely visual — the parent
-/// [GridViewWidget] handles slide-across activation.
+/// [GridViewWidget] handles activation.
 ///
 /// In [SoundSource.record] mode a [GestureDetector] long-press starts a
-/// rolling 1-second recording. The pad fades from dim red to bright green
-/// each second, synced with the recording loop.
+/// rolling 1-second recording with a dim-red→green fade.
+///
+/// Energy (0→100 %) controls the fill colour:
+///   0 %  → off-colour / root tint
+///   1–50 % → off → amber
+///   51–100 % → amber → bright red
 class PadWidget extends StatefulWidget {
   const PadWidget({
     super.key,
@@ -38,7 +42,9 @@ class PadWidget extends StatefulWidget {
 
 class _PadWidgetState extends State<PadWidget> {
   static const Color _offColor = Color(0xFF101018);
-  static const Color _rootColor = Color(0xFF192A19); // pale green tint
+  static const Color _rootColor = Color(0xFF192A19);
+  static const Color _amber = Color(0xFFFF6A00);
+  static const Color _brightRed = Color(0xFFFF0000);
   static const Color _borderColor = Color(0xFF2A2A2A);
   static const Color _recordStart = Color(0xFF4A0000);
   static const Color _recordEnd = Color(0xFF00CC00);
@@ -180,17 +186,25 @@ class _PadWidgetState extends State<PadWidget> {
 
   @override
   Widget build(BuildContext context) {
-    final rippleColor =
-        context.watch<GridState>().cellColor(widget.row, widget.col);
+    final energy =
+        context.watch<GridState>().cellEnergy(widget.row, widget.col);
+    final flash = context.watch<GridState>().flashColor(widget.row, widget.col);
     final mode = context.watch<GridSettings>().soundSource;
     final audio = context.read<AudioService>();
 
     Color fillColor;
-    if (_recording) {
+    if (flash != null) {
+      fillColor = flash;
+    } else if (_recording) {
       final t = _cycleProgress.clamp(0.0, 1.0);
       fillColor = Color.lerp(_recordStart, _recordEnd, t)!;
-    } else if (rippleColor != null) {
-      fillColor = rippleColor;
+    } else if (energy > 0.0) {
+      // Energy gradient: 0→50% = off→amber, 50→100% = amber→red.
+      if (energy <= 0.5) {
+        fillColor = Color.lerp(_offColor, _amber, energy * 2)!;
+      } else {
+        fillColor = Color.lerp(_amber, _brightRed, (energy - 0.5) * 2)!;
+      }
     } else if ((mode == SoundSource.playback || mode == SoundSource.record) &&
         audio.hasRecording(widget.row, widget.col)) {
       fillColor = const Color(0xFF1A1A22);
