@@ -1,0 +1,35 @@
+# Flutter / Dart
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+migrate_working_dir/
+coverage/
+*.log
+
+# pubspec.lock: ignored because the app is rebuilt from scratch (see README).
+# Remove this line if you want pinned, reproducible dependency resolution.
+pubspec.lock
+
+# Generated Android scaffold — regenerated via `flutter create` (see README).
+# The committed source of truth for kiosk files is tools/android_overlay/.
+android/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.fvm/
+
+# Android signing / local config
+**/local.properties
+**/key.properties
+**/*.keystore
+**/*.jks
+
+# OS
+.DS_Store
+Thumbs.db
