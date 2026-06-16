@@ -76,10 +76,31 @@ class SettingsScreen extends StatelessWidget {
 
           // ---- Arpeggiator ---------------------------------------------------
           SwitchListTile(
-            title: const Text('Arpeggiator (root → +3 → +7)'),
-            subtitle: const Text('Cycles through a minor triad on each retrigger'),
+            title: const Text('Arpeggiator'),
+            subtitle: Text('Pattern: ${settings.arpPattern.label}'),
             value: settings.arpEnabled,
             onChanged: settings.setArpEnabled,
+            contentPadding: EdgeInsets.zero,
+          ),
+          if (settings.arpEnabled) ...[
+            const SizedBox(height: 4),
+            SegmentedButton<ArpPattern>(
+              showSelectedIcon: false,
+              segments: ArpPattern.values
+                  .map((p) => ButtonSegment(value: p, label: Text(p.label)))
+                  .toList(),
+              selected: {settings.arpPattern},
+              onSelectionChanged: (sel) => settings.setArpPattern(sel.first),
+            ),
+          ],
+          const SizedBox(height: 24),
+
+          // ---- Echo ---------------------------------------------------------
+          SwitchListTile(
+            title: const Text('Echo'),
+            subtitle: const Text('Notes grow richer the longer they are held'),
+            value: settings.echoEnabled,
+            onChanged: settings.setEchoEnabled,
             contentPadding: EdgeInsets.zero,
           ),
           const SizedBox(height: 24),

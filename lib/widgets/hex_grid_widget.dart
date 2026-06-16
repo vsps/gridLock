@@ -33,7 +33,27 @@ class _HexGridWidgetState extends State<HexGridWidget> {
   int _arpStep = 0;
   ClockService? _clock;
 
-  static const List<int> _arpOffsets = [0, 3, 7];
+  static const List<int> _up = [0, 2, 4];       // 1-2-3
+  static const List<int> _down = [4, 2, 0];     // 3-2-1
+  static const List<int> _triad = [0, 4, 7];    // 1-3-5
+  static const List<int> _convDiv = [0, 7, 4];  // 1-5-3
+  static const List<int> _randomPool = [0, 2, 4, 7];
+  final math.Random _rng = math.Random();
+
+  int _nextArpOffset(ArpPattern p) {
+    switch (p) {
+      case ArpPattern.up:
+        return _up[_arpStep % _up.length];
+      case ArpPattern.down:
+        return _down[_arpStep % _down.length];
+      case ArpPattern.triad:
+        return _triad[_arpStep % _triad.length];
+      case ArpPattern.convDiv:
+        return _convDiv[_arpStep % _convDiv.length];
+      case ArpPattern.random:
+        return _randomPool[_rng.nextInt(_randomPool.length)];
+    }
+  }
 
   @override
   void didChangeDependencies() {
@@ -136,7 +156,7 @@ class _HexGridWidgetState extends State<HexGridWidget> {
     final bpm = settings.bpm;
     final barMs = (60000.0 / bpm * 4).round();
     final arp = settings.arpEnabled;
-    final arpOffset = _arpOffsets[_arpStep];
+    final arpOffset = arp ? _nextArpOffset(settings.arpPattern) : 0;
 
     final audio = context.read<AudioService>();
     final gridState = context.read<GridState>();
@@ -144,7 +164,7 @@ class _HexGridWidgetState extends State<HexGridWidget> {
     for (final entry in List.of(_heldSince.entries)) {
       final k = entry.key;
       final barsHeld = DateTime.now().difference(entry.value).inMilliseconds ~/ barMs;
-      final echo = barsHeld.clamp(0, 4);
+      final echo = settings.echoEnabled ? barsHeld.clamp(0, 4) : 0;
       _echoLevel[k] = echo;
 
       final row = k ~/ 1000;
@@ -155,7 +175,7 @@ class _HexGridWidgetState extends State<HexGridWidget> {
       gridState.trigger(row, col, lay.rows, lay.cols);
     }
 
-    if (arp) _arpStep = (_arpStep + 1) % _arpOffsets.length;
+    if (arp) _arpStep = (_arpStep + 1) % _up.length;
     setState(() {});
   }
 

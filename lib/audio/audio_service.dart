@@ -13,7 +13,7 @@ class AudioService {
 
   final Map<(int, int), AudioSource> _sources = {};
 
-  static const int _maxVoices = 6;
+  static const int _maxVoices = 20;
 
   // ---- lifecycle -------------------------------------------------------------
 

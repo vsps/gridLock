@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -18,6 +20,9 @@ class PlayScreen extends StatefulWidget {
 class _PlayScreenState extends State<PlayScreen> {
   bool _ready = false;
   bool _inSettings = false;
+  bool _showSetup = false;
+  int? _gesturePointer;
+  Timer? _setupTimer;
   KioskService? _kiosk;
 
   @override
@@ -34,16 +39,46 @@ class _PlayScreenState extends State<PlayScreen> {
   @override
   void dispose() {
     _kiosk?.removeListener(_onKioskChange);
+    _setupTimer?.cancel();
     super.dispose();
   }
 
-  // Auto-open settings whenever the system unpin fires.
   void _onKioskChange() {
-    if (!mounted || !_ready || _inSettings) return;
-    if (!(_kiosk?.isLocked ?? true)) {
-      _enterSettings(alreadyUnpinned: true);
+    if (mounted) setState(() {});
+  }
+
+  // ---- gesture: hold top-left corner, slide to right corner ----------------
+
+  void _onPointerDown(PointerDownEvent e) {
+    final w = MediaQuery.of(context).size.width;
+    final h = MediaQuery.of(context).size.height;
+    if (e.localPosition.dx < w * 0.25 && e.localPosition.dy < h * 0.25) {
+      _gesturePointer = e.pointer;
     }
   }
+
+  void _onPointerMove(PointerMoveEvent e) {
+    if (_gesturePointer != e.pointer) return;
+    final w = MediaQuery.of(context).size.width;
+    if (e.localPosition.dx > w * 0.75) {
+      _gesturePointer = null;
+      _revealSetup();
+    }
+  }
+
+  void _onPointerUp(PointerUpEvent e) {
+    if (_gesturePointer == e.pointer) _gesturePointer = null;
+  }
+
+  void _revealSetup() {
+    _setupTimer?.cancel();
+    setState(() => _showSetup = true);
+    _setupTimer = Timer(const Duration(seconds: 5), () {
+      if (mounted) setState(() => _showSetup = false);
+    });
+  }
+
+  // ---- boot ------------------------------------------------------------------
 
   @override
   void initState() {
@@ -70,6 +105,8 @@ class _PlayScreenState extends State<PlayScreen> {
   Future<void> _enterSettings({bool alreadyUnpinned = false}) async {
     if (_inSettings) return;
     _inSettings = true;
+    _setupTimer?.cancel();
+    setState(() => _showSetup = false);
 
     final clock = context.read<ClockService>();
     clock.stop();
@@ -94,12 +131,56 @@ class _PlayScreenState extends State<PlayScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isLocked = _kiosk?.isLocked ?? true;
+
     return Scaffold(
       backgroundColor: const Color(0xFF101018),
       body: SafeArea(
         child: _ready
-            ? const HexGridWidget()
+            ? Listener(
+                onPointerDown: _onPointerDown,
+                onPointerMove: _onPointerMove,
+                onPointerUp: _onPointerUp,
+                child: Stack(
+                  children: [
+                    const HexGridWidget(),
+                    if (_showSetup || !isLocked) _buildSetupButton(),
+                  ],
+                ),
+              )
             : const Center(child: CircularProgressIndicator()),
+      ),
+    );
+  }
+
+  Widget _buildSetupButton() {
+    return Positioned(
+      top: 12,
+      right: 12,
+      child: Material(
+        color: Colors.white.withAlpha(230),
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => _enterSettings(alreadyUnpinned: true),
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.settings, color: Colors.black87, size: 20),
+                SizedBox(width: 6),
+                Text(
+                  'Setup',
+                  style: TextStyle(
+                    color: Colors.black87,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

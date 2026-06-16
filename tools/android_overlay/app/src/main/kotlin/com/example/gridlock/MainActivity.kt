@@ -1,5 +1,6 @@
 package com.example.gridlock
 
+import android.app.ActivityManager
 import android.os.Build
 import android.view.View
 import android.view.WindowInsets
@@ -12,6 +13,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private val channelName = "com.example.gridlock/kiosk"
     private var channel: MethodChannel? = null
+    private var wasLocked = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -32,25 +34,37 @@ class MainActivity : FlutterActivity() {
 
     override fun onLockTaskModeExiting() {
         super.onLockTaskModeExiting()
-        // Notify Flutter that screen pinning was exited (e.g. Back + Recents).
+        wasLocked = false
         channel?.invokeMethod("onLockExited", null)
     }
 
+    // Belt-and-suspenders: detect unpin on every resume in case the
+    // onLockTaskModeExiting callback was missed.
+    override fun onResume() {
+        super.onResume()
+        val am = getSystemService(ACTIVITY_SERVICE) as ActivityManager
+        val nowLocked = am.lockTaskModeState != ActivityManager.LOCK_TASK_MODE_NONE
+        if (wasLocked && !nowLocked) {
+            channel?.invokeMethod("onLockExited", null)
+        }
+        wasLocked = nowLocked
+    }
+
     private fun startLock() {
-        // Ordinary screen pinning: with no Device Owner, startLockTask() shows
-        // the system pin confirmation and stays escapable (hold Back + Recents).
         try {
             startLockTask()
+            wasLocked = true
         } catch (e: IllegalStateException) {
-            // Already pinned, or not permitted on this device — ignore.
+            // Already pinned or not permitted — ignore.
         }
     }
 
     private fun stopLock() {
         try {
             stopLockTask()
+            wasLocked = false
         } catch (e: IllegalStateException) {
-            // Not currently pinned — ignore.
+            // Not pinned — ignore.
         }
     }
 

@@ -12,19 +12,19 @@ class _CellAnim {
   });
 
   final int fadeInStartMs;
-  final int fadeOutStartMs; // when fade-out begins (after hold at peak)
+  final int fadeOutStartMs;
   final double peak;
-  final double hue; // HSV hue 0–360
+  final double hue;
 
-  static const int fadeInMs = 80;
-  static const int fadeOutMs = 1000;
+  static const int fadeInMs = 150;
+  static const int fadeOutMs = 500;
 
   double energyAt(int nowMs) {
     final sinceIn = nowMs - fadeInStartMs;
     if (sinceIn < 0) return 0;
     if (sinceIn < fadeInMs) return peak * sinceIn / fadeInMs;
     final sinceFadeOut = nowMs - fadeOutStartMs;
-    if (sinceFadeOut < 0) return peak; // holding at peak
+    if (sinceFadeOut < 0) return peak;
     if (sinceFadeOut >= fadeOutMs) return 0;
     return peak * (1.0 - sinceFadeOut / fadeOutMs);
   }
@@ -32,24 +32,22 @@ class _CellAnim {
   bool isDone(int nowMs) => nowMs >= fadeOutStartMs + fadeOutMs;
 }
 
-/// Wave-based energy model with random hue per trigger and FIFO fade-out.
+/// Wave-based energy model with random hue per trigger and smooth blending.
 ///
-/// On each trigger:
-/// - Rings fade IN from centre outward (cascade, 80 ms per ring).
-/// - Once all rings are full, rings fade OUT from centre outward too
-///   (150 ms stagger per ring), so the ripple dims as it expands.
-/// - Each trigger gets a random HSV hue — cellColor() returns the blended Color.
+/// Each trigger pushes a new [_CellAnim] onto every cell.  [cellColor]
+/// sums the energies of all active anims for that cell and blends their
+/// hues, so overlapping ripples smoothly fade on and off together.
 class GridState extends ChangeNotifier {
   GridState() : _clock = Stopwatch()..start();
 
   static const int _stride = 64;
   static const double _dimPerRing = 0.10;
   static const double _minPeak = 0.05;
-  static const int _fadeOutStagger = 150; // ms between successive rings fading out
+  static const int _fadeOutStagger = 150;
 
   static const Color _offColor = Color(0xFF101018);
 
-  final Map<int, _CellAnim> _anims = {};
+  final Map<int, List<_CellAnim>> _anims = {};
   final Stopwatch _clock;
   Timer? _ticker;
   final math.Random _rng = math.Random();
@@ -70,23 +68,43 @@ class GridState extends ChangeNotifier {
 
   // ---- public API ------------------------------------------------------------
 
-  /// Blended fill colour for the cell, or null when the cell is at rest.
+  /// Blended fill colour from all active anims, or null when at rest.
   Color? cellColor(int row, int col) {
-    final anim = _anims[_key(row, col)];
-    if (anim == null) return null;
-    final energy = anim.energyAt(_now);
-    if (energy <= 0) return null;
-    final base = HSVColor.fromAHSV(1.0, anim.hue, 1.0, 1.0).toColor();
-    return Color.lerp(_offColor, base, energy);
+    final list = _anims[_key(row, col)];
+    if (list == null || list.isEmpty) return null;
+
+    final now = _now;
+    double totalEnergy = 0;
+    double weightedHueX = 0;
+    double weightedHueY = 0;
+
+    for (final a in list) {
+      final e = a.energyAt(now);
+      if (e <= 0) continue;
+      totalEnergy += e;
+      final rad = a.hue * math.pi / 180;
+      weightedHueX += e * math.cos(rad);
+      weightedHueY += e * math.sin(rad);
+    }
+
+    if (totalEnergy <= 0) return null;
+
+    // Blend hues on the colour wheel, then mix toward off-colour.
+    final blendedRad = math.atan2(weightedHueY, weightedHueX);
+    final blendedHue = (blendedRad * 180 / math.pi) % 360;
+    final clampedEnergy = totalEnergy.clamp(0.0, 1.0);
+
+    final base =
+        HSVColor.fromAHSV(1.0, blendedHue, 1.0, 1.0).toColor();
+    return Color.lerp(_offColor, base, clampedEnergy);
   }
 
-  /// Trigger a full-board wave from ([row],[col]).
-  /// Assigns a fresh random hue to every cell touched by this ripple.
+  /// Trigger a full-board wave.  Appends a fresh [_CellAnim] to every cell
+  /// so overlapping ripples blend smoothly.
   void trigger(int row, int col, int rows, int cols) {
     final now = _now;
     final hue = _rng.nextDouble() * 360;
 
-    // BFS — depth of every reachable cell.
     final depths = <int, int>{};
     final queue = <(int, int, int)>[];
 
@@ -107,8 +125,6 @@ class GridState extends ChangeNotifier {
       }
     }
 
-    // Fade-out starts only after ALL rings have reached peak, then staggers
-    // outward — so the centre begins fading before the outer rings.
     final maxDepth = depths.values.fold(0, math.max);
     final allPeakMs = now + (maxDepth + 1) * _CellAnim.fadeInMs;
 
@@ -119,17 +135,12 @@ class GridState extends ChangeNotifier {
       final fadeOutStart = allPeakMs + d * _fadeOutStagger;
       final peak = (1.0 - d * _dimPerRing).clamp(_minPeak, 1.0);
 
-      // Update only if this trigger would be brighter at the new peak moment.
-      final existing = _anims[k];
-      if (existing == null ||
-          peak >= existing.energyAt(fadeInStart + _CellAnim.fadeInMs)) {
-        _anims[k] = _CellAnim(
-          fadeInStartMs: fadeInStart,
-          fadeOutStartMs: fadeOutStart,
-          peak: peak,
-          hue: hue,
-        );
-      }
+      (_anims[k] ??= []).add(_CellAnim(
+        fadeInStartMs: fadeInStart,
+        fadeOutStartMs: fadeOutStart,
+        peak: peak,
+        hue: hue,
+      ));
     }
 
     _ensureTicker();
@@ -142,13 +153,13 @@ class GridState extends ChangeNotifier {
     if (row.isEven) {
       return [
         (row - 1, col - 1), (row - 1, col),
-        (row,     col - 1), (row,     col + 1),
+        (row, col - 1),     (row, col + 1),
         (row + 1, col - 1), (row + 1, col),
       ];
     } else {
       return [
         (row - 1, col),     (row - 1, col + 1),
-        (row,     col - 1), (row,     col + 1),
+        (row, col - 1),     (row, col + 1),
         (row + 1, col),     (row + 1, col + 1),
       ];
     }
@@ -160,7 +171,10 @@ class GridState extends ChangeNotifier {
     _ticker?.cancel();
     _ticker = Timer.periodic(const Duration(milliseconds: 16), (_) {
       final now = _now;
-      _anims.removeWhere((_, a) => a.isDone(now));
+      for (final list in _anims.values) {
+        list.removeWhere((a) => a.isDone(now));
+      }
+      _anims.removeWhere((_, list) => list.isEmpty);
       notifyListeners();
       if (_anims.isEmpty) {
         _ticker?.cancel();
