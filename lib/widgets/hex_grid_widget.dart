@@ -30,7 +30,11 @@ class _HexGridWidgetState extends State<HexGridWidget> {
   final Map<int, int> _echoLevel = {};
 
   int _lastRetriggerTick = -1;
+  int _arpStep = 0;
   ClockService? _clock;
+
+  // Minor triad: root, minor third, perfect fifth.
+  static const List<int> _arpOffsets = [0, 3, 7];
 
   @override
   void didChangeDependencies() {
@@ -124,22 +128,36 @@ class _HexGridWidgetState extends State<HexGridWidget> {
   void _onClockTick() {
     if (!mounted) return;
     final tick = _clock?.tickCount ?? 0;
-    if (tick % ClockService.ticksPerHalfBar != 0) return;
+    final settings = context.read<GridSettings>();
+    if (tick % settings.retrigger.ticks != 0) return;
     if (tick == _lastRetriggerTick) return;
     _lastRetriggerTick = tick;
     if (_heldSince.isEmpty) return;
 
     final lay = _makeLayout(context);
-    final bpm = context.read<GridSettings>().bpm;
+    final bpm = settings.bpm;
     final barMs = (60000.0 / bpm * 4).round();
+    final arp = settings.arpEnabled;
+    final arpOffset = _arpOffsets[_arpStep];
+
+    final audio = context.read<AudioService>();
+    final gridState = context.read<GridState>();
 
     for (final entry in List.of(_heldSince.entries)) {
       final k = entry.key;
       final barsHeld = DateTime.now().difference(entry.value).inMilliseconds ~/ barMs;
       final echo = barsHeld.clamp(0, 4);
       _echoLevel[k] = echo;
-      _fire(lay, k ~/ 1000, k % 1000, echo);
+
+      final row = k ~/ 1000;
+      final col = k % 1000;
+      final baseSem = HarmonicTable.semitones(row, col, lay.centerRow, lay.centerCol);
+
+      audio.playWithEcho(baseSem + (arp ? arpOffset : 0), echo);
+      gridState.trigger(row, col, lay.rows, lay.cols);
     }
+
+    if (arp) _arpStep = (_arpStep + 1) % _arpOffsets.length;
     setState(() {});
   }
 

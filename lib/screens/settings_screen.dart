@@ -25,14 +25,14 @@ class SettingsScreen extends StatelessWidget {
             child: const Padding(
               padding: EdgeInsets.all(12),
               child: Text(
-                'Screen pinning hides Home/Recents. Use the two-finger '
-                'unlock gesture to return here.',
+                'Screen pinning hides Home/Recents. Unpin to return here.',
                 style: TextStyle(color: Colors.black87),
               ),
             ),
           ),
           const SizedBox(height: 20),
 
+          // ---- BPM -----------------------------------------------------------
           Text('BPM: ${settings.bpm}',
               style: Theme.of(context).textTheme.titleMedium),
           Slider(
@@ -48,6 +48,7 @@ class SettingsScreen extends StatelessWidget {
           ),
           const SizedBox(height: 8),
 
+          // ---- Cell size -----------------------------------------------------
           Text('Cell size: ${settings.zoom}',
               style: Theme.of(context).textTheme.titleMedium),
           Slider(
@@ -58,8 +59,32 @@ class SettingsScreen extends StatelessWidget {
             label: '${settings.zoom}',
             onChanged: (v) => settings.setZoom(v.round()),
           ),
+          const SizedBox(height: 16),
+
+          // ---- Retrigger interval --------------------------------------------
+          Text('Retrigger', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          SegmentedButton<RetriggerInterval>(
+            showSelectedIcon: false,
+            segments: RetriggerInterval.values
+                .map((r) => ButtonSegment(value: r, label: Text(r.label)))
+                .toList(),
+            selected: {settings.retrigger},
+            onSelectionChanged: (sel) => settings.setRetrigger(sel.first),
+          ),
+          const SizedBox(height: 16),
+
+          // ---- Arpeggiator ---------------------------------------------------
+          SwitchListTile(
+            title: const Text('Arpeggiator (root → +3 → +7)'),
+            subtitle: const Text('Cycles through a minor triad on each retrigger'),
+            value: settings.arpEnabled,
+            onChanged: settings.setArpEnabled,
+            contentPadding: EdgeInsets.zero,
+          ),
           const SizedBox(height: 24),
 
+          // ---- Actions -------------------------------------------------------
           FilledButton.icon(
             icon: const Icon(Icons.lock),
             label: const Text('Re-lock (return to play)'),
