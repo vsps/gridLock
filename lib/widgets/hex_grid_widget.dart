@@ -122,10 +122,13 @@ class _HexGridWidgetState extends State<HexGridWidget> {
     context.read<GridState>().trigger(row, col, lay.rows, lay.cols);
   }
 
-  void _activate(_Layout lay, int row, int col, {bool quantized = false}) {
+  void _activate(_Layout lay, int row, int col) {
     final k = _key(row, col);
     final echo = _echoLevel[k] ?? 0;
-    if (quantized) {
+    final q = context.read<GridSettings>().quantisation;
+    if (q == Quantisation.off) {
+      _fire(lay, row, col, echo);
+    } else {
       final delay = _clock?.msToNextTick() ?? 0;
       if (delay <= 0) {
         _fire(lay, row, col, echo);
@@ -136,8 +139,6 @@ class _HexGridWidgetState extends State<HexGridWidget> {
           }
         });
       }
-    } else {
-      _fire(lay, row, col, echo);
     }
   }
 
@@ -194,7 +195,7 @@ class _HexGridWidgetState extends State<HexGridWidget> {
     _echoLevel.putIfAbsent(k, () => 0);
 
     context.read<GridState>().beginSwipe();
-    _activate(lay, row, col, quantized: true);
+    _activate(lay, row, col);
     setState(() {});
   }
 

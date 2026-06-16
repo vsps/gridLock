@@ -61,6 +61,20 @@ class SettingsScreen extends StatelessWidget {
           ),
           const SizedBox(height: 16),
 
+          // ---- Quantisation -------------------------------------------------
+          Text('Quantisation',
+              style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          SegmentedButton<Quantisation>(
+            showSelectedIcon: false,
+            segments: Quantisation.values
+                .map((q) => ButtonSegment(value: q, label: Text(q.label)))
+                .toList(),
+            selected: {settings.quantisation},
+            onSelectionChanged: (sel) => settings.setQuantisation(sel.first),
+          ),
+          const SizedBox(height: 16),
+
           // ---- Retrigger interval --------------------------------------------
           Text('Retrigger', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),

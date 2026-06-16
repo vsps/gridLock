@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
-/// BPM clock ticking at 1/16th-note resolution (4 ticks per beat).
+/// BPM clock ticking at 1/32nd-note resolution (8 ticks per beat).
 ///
 /// Listeners are notified on every tick. Check [tickCount] % N to detect
 /// bar subdivisions. [msToNextTick] gives the delay to the next tick boundary
@@ -13,10 +13,10 @@ class ClockService extends ChangeNotifier {
   Timer? _timer;
   DateTime _lastTickTime = DateTime.now();
 
-  /// Half-bar in ticks (4/4 at 16th-note resolution: 8 ticks = half bar).
-  static const int ticksPerHalfBar = 8;
-  static const int ticksPerBar = 16;
-  static const int ticksPerBeat = 4;
+  /// Half-bar in ticks (4/4 at 32nd-note resolution: 16 ticks = half bar).
+  static const int ticksPerHalfBar = 16;
+  static const int ticksPerBar = 32;
+  static const int ticksPerBeat = 8;
 
   ClockService({int bpm = 128}) : _bpm = bpm;
 
@@ -45,7 +45,7 @@ class ClockService extends ChangeNotifier {
     }
   }
 
-  /// Milliseconds until the next 1/16th-note tick boundary.
+  /// Milliseconds until the next 1/32nd-note tick boundary.
   int msToNextTick() {
     final elapsed =
         DateTime.now().difference(_lastTickTime).inMicroseconds / 1000.0;

@@ -92,6 +92,7 @@ class _PlayScreenState extends State<PlayScreen> {
     final settings = context.read<GridSettings>();
 
     await audio.preloadSynth();
+    await settings.load();
     clock.setBpm(settings.bpm);
     clock.start();
 
