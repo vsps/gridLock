@@ -17,6 +17,33 @@ class PlayScreen extends StatefulWidget {
 
 class _PlayScreenState extends State<PlayScreen> {
   bool _ready = false;
+  bool _inSettings = false;
+  KioskService? _kiosk;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final kiosk = context.read<KioskService>();
+    if (kiosk != _kiosk) {
+      _kiosk?.removeListener(_onKioskChange);
+      _kiosk = kiosk;
+      _kiosk!.addListener(_onKioskChange);
+    }
+  }
+
+  @override
+  void dispose() {
+    _kiosk?.removeListener(_onKioskChange);
+    super.dispose();
+  }
+
+  // Auto-open settings whenever the system unpin fires.
+  void _onKioskChange() {
+    if (!mounted || !_ready || _inSettings) return;
+    if (!(_kiosk?.isLocked ?? true)) {
+      _enterSettings(alreadyUnpinned: true);
+    }
+  }
 
   @override
   void initState() {
@@ -26,27 +53,30 @@ class _PlayScreenState extends State<PlayScreen> {
 
   Future<void> _boot() async {
     final audio = context.read<AudioService>();
-    final kiosk = context.read<KioskService>();
     final clock = context.read<ClockService>();
     final settings = context.read<GridSettings>();
 
     await audio.preloadSynth();
-
     clock.setBpm(settings.bpm);
     clock.start();
 
-    await kiosk.keepScreenOn(true);
-    await kiosk.enableImmersiveMode();
-    await kiosk.startLock();
+    await _kiosk!.keepScreenOn(true);
+    await _kiosk!.enableImmersiveMode();
+    await _kiosk!.startLock();
 
     if (mounted) setState(() => _ready = true);
   }
 
-  Future<void> _openSettings() async {
-    final kiosk = context.read<KioskService>();
+  Future<void> _enterSettings({bool alreadyUnpinned = false}) async {
+    if (_inSettings) return;
+    _inSettings = true;
+
     final clock = context.read<ClockService>();
     clock.stop();
-    await kiosk.stopLock();
+
+    if (!alreadyUnpinned) {
+      await _kiosk!.stopLock();
+    }
     if (!mounted) return;
 
     await Navigator.of(context).push(
@@ -54,60 +84,22 @@ class _PlayScreenState extends State<PlayScreen> {
     );
 
     if (!mounted) return;
+    _inSettings = false;
     final settings = context.read<GridSettings>();
     clock.setBpm(settings.bpm);
     clock.start();
-    await kiosk.startLock();
-    await kiosk.enableImmersiveMode();
+    await _kiosk!.startLock();
+    await _kiosk!.enableImmersiveMode();
   }
 
   @override
   Widget build(BuildContext context) {
-    final isLocked = context.select<KioskService, bool>((k) => k.isLocked);
-
     return Scaffold(
       backgroundColor: const Color(0xFF101018),
       body: SafeArea(
         child: _ready
-            ? Stack(
-                children: [
-                  const HexGridWidget(),
-                  if (!isLocked) _buildSetupButton(),
-                ],
-              )
+            ? const HexGridWidget()
             : const Center(child: CircularProgressIndicator()),
-      ),
-    );
-  }
-
-  Widget _buildSetupButton() {
-    return Positioned(
-      top: 12,
-      right: 12,
-      child: Material(
-        color: Colors.white.withAlpha(230),
-        borderRadius: BorderRadius.circular(12),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: _openSettings,
-          child: const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.settings, color: Colors.black87, size: 20),
-                SizedBox(width: 6),
-                Text(
-                  'Setup',
-                  style: TextStyle(
-                    color: Colors.black87,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
       ),
     );
   }

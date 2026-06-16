@@ -17,7 +17,7 @@ class _CellAnim {
   final double hue; // HSV hue 0–360
 
   static const int fadeInMs = 80;
-  static const int fadeOutMs = 2000;
+  static const int fadeOutMs = 1000;
 
   double energyAt(int nowMs) {
     final sinceIn = nowMs - fadeInStartMs;
