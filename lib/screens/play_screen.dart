@@ -6,7 +6,6 @@ import '../clock/clock_service.dart';
 import '../models/grid_settings.dart';
 import '../services/kiosk_service.dart';
 import '../widgets/hex_grid_widget.dart';
-import '../widgets/kiosk_listener.dart';
 import 'settings_screen.dart';
 
 class PlayScreen extends StatefulWidget {
@@ -87,10 +86,7 @@ class _PlayScreenState extends State<PlayScreen> {
         child: _ready
             ? Stack(
                 children: [
-                  KioskListener(
-                    onUnlock: _openSettings,
-                    child: const HexGridWidget(),
-                  ),
+                  const HexGridWidget(),
                   if (!isLocked) _buildSetupButton(),
                 ],
               )

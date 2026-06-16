@@ -2,25 +2,29 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
-/// Per-cell energy (0–1) that decays over 2 s and propagates to hex neighbours
-/// at depth 1 (+50 %) and depth 2 (+25 %) on each trigger.
+class _CellAnim {
+  const _CellAnim({required this.waveStartMs, required this.peak});
+  final int waveStartMs; // stopwatch ms when fade-in begins
+  final double peak;     // max energy (1.0 at ring 0, -10% per ring)
+}
+
+/// Wave-based energy model.
 ///
-/// No ripple flash — callers just read [cellEnergy] to tint cells.
+/// Each trigger BFS-propagates across the whole grid. Ring N starts fading in
+/// once ring N-1 reaches full brightness (i.e., after N × fadeInMs). Each ring
+/// is 10 % dimmer than the previous. Fade-in is fast; fade-out is slow (2 s).
 class GridState extends ChangeNotifier {
   GridState() : _clock = Stopwatch()..start();
 
-  static const int _stride = 64; // wide enough for any grid width
+  static const int _stride = 64;
+  static const int _fadeInMs = 80;
+  static const int _fadeOutMs = 2000;
+  static const double _dimPerRing = 0.10;
+  static const double _minPeak = 0.05;
 
-  static const double _decayPerMs = 1.0 / 2000.0; // full decay in 2 s
-
-  static const double _pressBoost = 0.25;
-  static const double _wave1Boost = 0.50;
-  static const double _wave2Boost = 0.25;
-
-  final Map<int, double> _energy = {};
+  final Map<int, _CellAnim> _anims = {};
   final Stopwatch _clock;
   Timer? _ticker;
-  int _lastTickMs = 0;
 
   int _key(int row, int col) => row * _stride + col;
   int get _now => _clock.elapsedMilliseconds;
@@ -40,19 +44,53 @@ class GridState extends ChangeNotifier {
 
   // ---- public API ------------------------------------------------------------
 
-  double cellEnergy(int row, int col) =>
-      (_energy[_key(row, col)] ?? 0.0).clamp(0.0, 1.0);
+  double cellEnergy(int row, int col) => _energyAt(_anims[_key(row, col)], _now);
 
-  void addEnergy(int row, int col, int rows, int cols) {
-    _applyBoost(row, col, _pressBoost, rows, cols);
-    _propagateEnergy(row, col, rows, cols);
+  /// Trigger a wave from ([row],[col]), propagating across the whole [rows]×[cols] grid.
+  void trigger(int row, int col, int rows, int cols) {
+    final now = _now;
+
+    // BFS — record each cell's ring depth from the trigger point.
+    final depth = <int, int>{};
+    final queue = <(int, int, int)>[];
+
+    void enqueue(int r, int c, int d) {
+      if (r < 0 || r >= rows || c < 0 || c >= cols) return;
+      final k = _key(r, c);
+      if (depth.containsKey(k)) return;
+      depth[k] = d;
+      queue.add((r, c, d));
+    }
+
+    enqueue(row, col, 0);
+    var head = 0;
+    while (head < queue.length) {
+      final (r, c, d) = queue[head++];
+      for (final (nr, nc) in hexNeighbors(r, c)) {
+        enqueue(nr, nc, d + 1);
+      }
+    }
+
+    // Apply animations — only update a cell if the new wave is brighter at the
+    // moment it would peak than whatever is already scheduled.
+    for (final entry in depth.entries) {
+      final k = entry.key;
+      final d = entry.value;
+      final waveStart = now + d * _fadeInMs;
+      final peak = (1.0 - d * _dimPerRing).clamp(_minPeak, 1.0);
+      final peakTime = waveStart + _fadeInMs;
+      final existing = _anims[k];
+      if (existing == null || peak > _energyAt(existing, peakTime)) {
+        _anims[k] = _CellAnim(waveStartMs: waveStart, peak: peak);
+      }
+    }
+
     _ensureTicker();
     notifyListeners();
   }
 
   // ---- hex adjacency ---------------------------------------------------------
 
-  /// Returns the 6 hex neighbours for offset-row layout.
   static List<(int, int)> hexNeighbors(int row, int col) {
     if (row.isEven) {
       return [
@@ -69,51 +107,27 @@ class GridState extends ChangeNotifier {
     }
   }
 
-  // ---- propagation -----------------------------------------------------------
+  // ---- helpers ---------------------------------------------------------------
 
-  void _applyBoost(int row, int col, double boost, int rows, int cols) {
-    if (row < 0 || row >= rows || col < 0 || col >= cols) return;
-    final k = _key(row, col);
-    _energy[k] = ((_energy[k] ?? 0.0) + boost).clamp(0.0, 1.0);
-  }
-
-  void _propagateEnergy(int row, int col, int rows, int cols) {
-    final visited = <int>{_key(row, col)};
-    final wave1 = <(int, int)>[];
-    final wave2 = <(int, int)>[];
-
-    for (final (nr, nc) in hexNeighbors(row, col)) {
-      if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
-      if (visited.add(_key(nr, nc))) wave1.add((nr, nc));
-    }
-    for (final (r1, c1) in wave1) {
-      _applyBoost(r1, c1, _wave1Boost, rows, cols);
-      for (final (nr, nc) in hexNeighbors(r1, c1)) {
-        if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
-        if (visited.add(_key(nr, nc))) wave2.add((nr, nc));
-      }
-    }
-    for (final (r2, c2) in wave2) {
-      _applyBoost(r2, c2, _wave2Boost, rows, cols);
-    }
+  static double _energyAt(_CellAnim? anim, int nowMs) {
+    if (anim == null) return 0;
+    final elapsed = nowMs - anim.waveStartMs;
+    if (elapsed < 0) return 0;
+    if (elapsed < _fadeInMs) return anim.peak * elapsed / _fadeInMs;
+    final decay = elapsed - _fadeInMs;
+    if (decay >= _fadeOutMs) return 0;
+    return anim.peak * (1.0 - decay / _fadeOutMs);
   }
 
   // ---- ticker ----------------------------------------------------------------
 
   void _ensureTicker() {
-    _lastTickMs = _now;
     _ticker?.cancel();
     _ticker = Timer.periodic(const Duration(milliseconds: 16), (_) {
       final now = _now;
-      final elapsed = now - _lastTickMs;
-      _lastTickMs = now;
-
-      final decay = _decayPerMs * elapsed;
-      _energy.updateAll((_, v) => (v - decay).clamp(0.0, 1.0));
-      _energy.removeWhere((_, v) => v == 0.0);
-
+      _anims.removeWhere((_, a) => now - a.waveStartMs >= _fadeInMs + _fadeOutMs);
       notifyListeners();
-      if (_energy.isEmpty) {
+      if (_anims.isEmpty) {
         _ticker?.cancel();
         _ticker = null;
       }
