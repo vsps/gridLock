@@ -2,7 +2,6 @@ import 'dart:math' as math;
 
 import 'package:flutter_soloud/flutter_soloud.dart';
 
-import '../grid/harmonic_table.dart';
 import 'tone_generator.dart';
 
 /// Synth-only audio service backed by SoLoud.
@@ -28,19 +27,11 @@ class AudioService {
     }
   }
 
-  /// Pre-generates echo-level-0 tones for all visible cells.
-  Future<void> preloadSynth({
-    required int rows,
-    required int cols,
-    required int centerRow,
-    required int centerCol,
-  }) async {
+  /// Pre-generates echo-level-0 tones for a wide semitone range (C1–C7).
+  Future<void> preloadSynth() async {
     await init();
-    for (var r = 0; r < rows; r++) {
-      for (var c = 0; c < cols; c++) {
-        final s = HarmonicTable.semitones(r, c, centerRow, centerCol);
-        await _getOrCreate(s, 0);
-      }
+    for (var s = -36; s <= 36; s++) {
+      await _getOrCreate(s, 0);
     }
   }
 

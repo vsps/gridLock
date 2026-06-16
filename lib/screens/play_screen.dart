@@ -30,22 +30,7 @@ class _PlayScreenState extends State<PlayScreen> {
     final clock = context.read<ClockService>();
     final settings = context.read<GridSettings>();
 
-    // Compute initial grid dimensions from screen size and zoom.
-    final size = MediaQuery.of(context).size;
-    final hexR = settings.hexRadius;
-    final cellW = hexR * 2;
-    final rowH = hexR * 1.732; // sqrt(3)
-    var cols = (size.width / cellW).ceil() + 2;
-    var rows = (size.height / rowH).ceil() + 2;
-    if (cols.isEven) cols++;
-    if (rows.isEven) rows++;
-
-    await audio.preloadSynth(
-      rows: rows,
-      cols: cols,
-      centerRow: rows ~/ 2,
-      centerCol: cols ~/ 2,
-    );
+    await audio.preloadSynth();
 
     clock.setBpm(settings.bpm);
     clock.start();

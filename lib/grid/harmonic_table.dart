@@ -3,30 +3,34 @@ import 'dart:math' as math;
 /// Maps hex-grid coordinates to musical notes via the Tonnetz layout.
 ///
 /// Moving right (+col): +7 semitones (perfect fifth).
-/// Moving up (+row toward lower index): +4 semitones (major third).
-/// Center cell is always middle C (C4 = 261.63 Hz).
+/// Moving up (decreasing row index): +4 semitones (major third).
+///
+/// The reference cell (refRow, refCol) is the lower-left visible corner and
+/// is anchored to C2 (−24 semitones from C4).
 class HarmonicTable {
   HarmonicTable._();
 
   static const double _c4Hz = 261.63;
+  static const int _c2Offset = -24; // C2 relative to C4
 
   static const List<String> _noteNames = [
     'C', 'C#', 'D', 'D#', 'E', 'F',
     'F#', 'G', 'G#', 'A', 'A#', 'B',
   ];
 
-  /// Semitones above C4 for this cell. May be negative (below middle C).
-  static int semitones(int row, int col, int centerRow, int centerCol) {
-    return (col - centerCol) * 7 + (centerRow - row) * 4;
+  /// Semitones above C4. Negative = below C4.
+  /// (refRow, refCol) maps to C2 (−24).
+  static int semitones(int row, int col, int refRow, int refCol) {
+    return (col - refCol) * 7 + (refRow - row) * 4 + _c2Offset;
   }
 
   /// Frequency in Hz.
-  static double frequency(int row, int col, int centerRow, int centerCol) {
-    final s = semitones(row, col, centerRow, centerCol);
+  static double frequency(int row, int col, int refRow, int refCol) {
+    final s = semitones(row, col, refRow, refCol);
     return _c4Hz * math.pow(2, s / 12.0);
   }
 
-  /// True when the cell is any C note.
+  /// True when [s] is any C note.
   static bool isC(int s) => s % 12 == 0;
 
   /// Display name including octave, e.g. "F#3".

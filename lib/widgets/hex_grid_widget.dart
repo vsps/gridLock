@@ -13,8 +13,8 @@ import 'hex_cell_painter.dart';
 
 /// Full-screen harmonic table (Tonnetz) keyboard.
 ///
-/// 50 px top/bottom margins; only fully-visible circles are drawn and
-/// interactive. Wave propagation cascades outward via [GridState.trigger].
+/// Lower-left visible cell = C2. Right = +P5, up = +M3.
+/// 50 px top/bottom margins; only fully-visible circles are drawn/interactive.
 class HexGridWidget extends StatefulWidget {
   const HexGridWidget({super.key});
 
@@ -33,7 +33,6 @@ class _HexGridWidgetState extends State<HexGridWidget> {
   int _arpStep = 0;
   ClockService? _clock;
 
-  // Minor triad: root, minor third, perfect fifth.
   static const List<int> _arpOffsets = [0, 3, 7];
 
   @override
@@ -64,12 +63,11 @@ class _HexGridWidgetState extends State<HexGridWidget> {
     return Offset(x, y);
   }
 
-  bool _isVisible(_Layout lay, Size size, double cx, double cy) {
-    return cx - lay.hexR >= 0 &&
-        cx + lay.hexR <= size.width &&
-        cy - lay.hexR >= _margin &&
-        cy + lay.hexR <= size.height - _margin;
-  }
+  bool _isVisible(_Layout lay, Size size, double cx, double cy) =>
+      cx - lay.hexR >= 0 &&
+      cx + lay.hexR <= size.width &&
+      cy - lay.hexR >= _margin &&
+      cy + lay.hexR <= size.height - _margin;
 
   (int, int)? _hitTest(_Layout lay, Size size, Offset pos) {
     final approxRow = ((pos.dy - lay.originY - lay.hexR) / lay.rowH).round();
@@ -99,7 +97,7 @@ class _HexGridWidgetState extends State<HexGridWidget> {
   // ---- audio -----------------------------------------------------------------
 
   void _fire(_Layout lay, int row, int col, int echoLevel) {
-    final sem = HarmonicTable.semitones(row, col, lay.centerRow, lay.centerCol);
+    final sem = HarmonicTable.semitones(row, col, lay.refRow, lay.refCol);
     context.read<AudioService>().playWithEcho(sem, echoLevel);
     context.read<GridState>().trigger(row, col, lay.rows, lay.cols);
   }
@@ -151,7 +149,7 @@ class _HexGridWidgetState extends State<HexGridWidget> {
 
       final row = k ~/ 1000;
       final col = k % 1000;
-      final baseSem = HarmonicTable.semitones(row, col, lay.centerRow, lay.centerCol);
+      final baseSem = HarmonicTable.semitones(row, col, lay.refRow, lay.refCol);
 
       audio.playWithEcho(baseSem + (arp ? arpOffset : 0), echo);
       gridState.trigger(row, col, lay.rows, lay.cols);
@@ -257,15 +255,15 @@ class _HexGridWidgetState extends State<HexGridWidget> {
 // ---- layout ---------------------------------------------------------------
 
 class _Layout {
-  const _Layout(
-    this.rows,
-    this.cols,
-    this.hexR,
-    this.originX,
-    this.originY,
-    this.centerRow,
-    this.centerCol,
-  );
+  const _Layout({
+    required this.rows,
+    required this.cols,
+    required this.hexR,
+    required this.originX,
+    required this.originY,
+    required this.refRow,
+    required this.refCol,
+  });
 
   factory _Layout.fromSettings(GridSettings settings, Size size) {
     const margin = 50.0;
@@ -273,18 +271,31 @@ class _Layout {
     final cellW = hexR * 2;
     final rowH = hexR * math.sqrt(3);
     final effectiveH = size.height - 2 * margin;
+
     var cols = (size.width / cellW).ceil() + 2;
     var rows = (effectiveH / rowH).ceil() + 2;
     if (cols.isEven) cols++;
     if (rows.isEven) rows++;
+
+    final originX = (size.width - cols * cellW) / 2;
+    final originY = margin + (effectiveH - rows * rowH) / 2;
+
+    // Lower-left visible cell — anchored to C2 in HarmonicTable.
+    final lastRow = ((size.height - margin - originY - 2 * hexR) / rowH)
+        .floor()
+        .clamp(0, rows - 1);
+    final firstCol = lastRow.isOdd
+        ? (-(originX + hexR) / cellW).ceil().clamp(0, cols - 1)
+        : (-originX / cellW).ceil().clamp(0, cols - 1);
+
     return _Layout(
-      rows,
-      cols,
-      hexR,
-      (size.width - cols * cellW) / 2,
-      margin + (effectiveH - rows * rowH) / 2,
-      rows ~/ 2,
-      cols ~/ 2,
+      rows: rows,
+      cols: cols,
+      hexR: hexR,
+      originX: originX,
+      originY: originY,
+      refRow: lastRow,
+      refCol: firstCol,
     );
   }
 
@@ -293,8 +304,10 @@ class _Layout {
   final double hexR;
   final double originX;
   final double originY;
-  final int centerRow;
-  final int centerCol;
+
+  /// Lower-left visible cell — maps to C2 via [HarmonicTable.semitones].
+  final int refRow;
+  final int refCol;
 
   double get cellW => hexR * 2;
   double get rowH => hexR * math.sqrt(3);
@@ -323,10 +336,10 @@ class _HexGridPainter extends CustomPainter {
 
     for (var row = 0; row < lay.rows; row++) {
       for (var col = 0; col < lay.cols; col++) {
-        final cx = lay.originX + col * lay.cellW + (row.isOdd ? lay.hexR : 0) + lay.hexR;
+        final cx =
+            lay.originX + col * lay.cellW + (row.isOdd ? lay.hexR : 0) + lay.hexR;
         final cy = lay.originY + row * lay.rowH + lay.hexR;
 
-        // Skip any circle that would be clipped.
         if (cx - lay.hexR < 0 ||
             cx + lay.hexR > size.width ||
             cy - lay.hexR < margin ||
@@ -334,7 +347,7 @@ class _HexGridPainter extends CustomPainter {
           continue;
         }
 
-        final sem = HarmonicTable.semitones(row, col, lay.centerRow, lay.centerCol);
+        final sem = HarmonicTable.semitones(row, col, lay.refRow, lay.refCol);
         final energy = gridState.cellEnergy(row, col);
         final key = row * 1000 + col;
 
@@ -355,6 +368,5 @@ class _HexGridPainter extends CustomPainter {
   bool shouldRepaint(_HexGridPainter old) =>
       old.layout.hexR != layout.hexR ||
       old.layout.rows != layout.rows ||
-      old.heldKeys.length != heldKeys.length ||
       old.heldKeys != heldKeys;
 }
