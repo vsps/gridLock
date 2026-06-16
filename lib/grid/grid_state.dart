@@ -1,50 +1,23 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 
-/// Tracks per-cell energy (0-100 %) that decays over time and ripples outward
-/// when a pad hits 100 %.
+/// Per-cell energy (0–1) that decays over 2 s and propagates to hex neighbours
+/// at depth 1 (+50 %) and depth 2 (+25 %) on each trigger.
 ///
-/// Pressing a pad adds 25 %. When energy reaches 100 % the pad resets to 0 %
-/// and fires a propagation: cardinal neighbours +50 %, their neighbours +25 %.
-/// If a neighbour hits 100 % from propagation it cascades.
-///
-/// A fast visual flash wave sweeps across **all** cells on every trigger
-/// (staggered by Manhattan distance) so the user sees a wave even though
-/// only neighbours receive energy.
+/// No ripple flash — callers just read [cellEnergy] to tint cells.
 class GridState extends ChangeNotifier {
   GridState() : _clock = Stopwatch()..start();
 
-  // Layout stride for unique cell keys.
-  static const int _stride = 8;
+  static const int _stride = 64; // wide enough for any grid width
 
-  // ---- tunables --------------------------------------------------------------
-
-  /// Decay rate: fraction of full energy lost per millisecond (100 % in 1.5 s).
-  static const double _decayPerMs = 1.0 / 1500.0;
+  static const double _decayPerMs = 1.0 / 2000.0; // full decay in 2 s
 
   static const double _pressBoost = 0.25;
-  static const double _primaryBoost = 0.50;
-  static const double _secondaryBoost = 0.25;
-
-  /// Flash wave: stagger per Manhattan-distance step and total flash duration.
-  static const int _flashStaggerMs = 25;
-  static const int _flashDurationMs = 350;
-
-  static const List<List<int>> _deltas = [
-    [-1, 0],
-    [1, 0],
-    [0, -1],
-    [0, 1],
-  ];
-
-  // ---- state -----------------------------------------------------------------
+  static const double _wave1Boost = 0.50;
+  static const double _wave2Boost = 0.25;
 
   final Map<int, double> _energy = {};
-
-  /// Flash animation: cell key → wall-clock start time (ms).
-  final Map<int, int> _flashStart = {};
-
   final Stopwatch _clock;
   Timer? _ticker;
   int _lastTickMs = 0;
@@ -52,38 +25,11 @@ class GridState extends ChangeNotifier {
   int _key(int row, int col) => row * _stride + col;
   int get _now => _clock.elapsedMilliseconds;
 
-  // ---- public API ------------------------------------------------------------
+  // ---- slide dedup -----------------------------------------------------------
 
-  /// Current energy for the cell, 0.0 – 1.0.
-  double cellEnergy(int row, int col) =>
-      (_energy[_key(row, col)] ?? 0.0).clamp(0.0, 1.0);
-
-  /// Flash colour for the cell, or null when no flash is active.
-  Color? flashColor(int row, int col) {
-    final start = _flashStart[_key(row, col)];
-    if (start == null) return null;
-    final elapsed = _now - start;
-    if (elapsed < 0 || elapsed > _flashDurationMs) return null;
-    if (elapsed < 80) return Colors.red;
-    final t = (elapsed - 80) / (_flashDurationMs - 80);
-    return Color.lerp(Colors.red, const Color(0x00000000), t);
-  }
-
-  /// Adds [_pressBoost] energy to the pad at ([row], [col]). If the pad
-  /// reaches 100 % it triggers a ripple propagation across the given grid.
-  void addEnergy(int row, int col, int rows, int cols) {
-    _applyBoost(row, col, _pressBoost, rows, cols);
-    _ensureTicker();
-    notifyListeners();
-  }
-
-  /// Slide-aware claim — prevents re-triggering from jitter within one cell
-  /// while allowing a pad to fire again once the finger leaves and returns.
   int _lastPadKey = -1;
 
-  void beginSwipe() {
-    _lastPadKey = -1;
-  }
+  void beginSwipe() => _lastPadKey = -1;
 
   bool tryClaimPad(int row, int col) {
     final k = _key(row, col);
@@ -92,92 +38,73 @@ class GridState extends ChangeNotifier {
     return true;
   }
 
-  // ---- internal --------------------------------------------------------------
+  // ---- public API ------------------------------------------------------------
+
+  double cellEnergy(int row, int col) =>
+      (_energy[_key(row, col)] ?? 0.0).clamp(0.0, 1.0);
+
+  void addEnergy(int row, int col, int rows, int cols) {
+    _applyBoost(row, col, _pressBoost, rows, cols);
+    _propagateEnergy(row, col, rows, cols);
+    _ensureTicker();
+    notifyListeners();
+  }
+
+  // ---- hex adjacency ---------------------------------------------------------
+
+  /// Returns the 6 hex neighbours for offset-row layout.
+  static List<(int, int)> hexNeighbors(int row, int col) {
+    if (row.isEven) {
+      return [
+        (row - 1, col - 1), (row - 1, col),
+        (row,     col - 1), (row,     col + 1),
+        (row + 1, col - 1), (row + 1, col),
+      ];
+    } else {
+      return [
+        (row - 1, col),     (row - 1, col + 1),
+        (row,     col - 1), (row,     col + 1),
+        (row + 1, col),     (row + 1, col + 1),
+      ];
+    }
+  }
+
+  // ---- propagation -----------------------------------------------------------
 
   void _applyBoost(int row, int col, double boost, int rows, int cols) {
+    if (row < 0 || row >= rows || col < 0 || col >= cols) return;
     final k = _key(row, col);
-    final old = _energy[k] ?? 0.0;
-    final neu = (old + boost).clamp(0.0, 1.0);
-
-    if (neu >= 1.0 && old < 1.0) {
-      _energy[k] = 0.0;
-      _startFlashWave(row, col, rows, cols);
-      _propagateEnergy(row, col, rows, cols);
-    } else {
-      _energy[k] = neu;
-    }
+    _energy[k] = ((_energy[k] ?? 0.0) + boost).clamp(0.0, 1.0);
   }
 
-  /// Visual flash BFS across **all** cells.
-  void _startFlashWave(int startRow, int startCol, int rows, int cols) {
-    final now = _now;
-    final visited = <int>{};
-    final queue = <List<int>>[];
+  void _propagateEnergy(int row, int col, int rows, int cols) {
+    final visited = <int>{_key(row, col)};
+    final wave1 = <(int, int)>[];
+    final wave2 = <(int, int)>[];
 
-    visited.add(_key(startRow, startCol));
-    queue.add([startRow, startCol, 0]);
-
-    var head = 0;
-    while (head < queue.length) {
-      final cur = queue[head++];
-      final r = cur[0];
-      final c = cur[1];
-      final wave = cur[2];
-      _flashStart[_key(r, c)] = now + wave * _flashStaggerMs;
-
-      for (final d in _deltas) {
-        final nr = r + d[0];
-        final nc = c + d[1];
-        if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
-        final nk = _key(nr, nc);
-        if (visited.add(nk)) {
-          queue.add([nr, nc, wave + 1]);
-        }
-      }
-    }
-  }
-
-  /// Energy propagation: neighbours +50 %, their neighbours +25 %.
-  void _propagateEnergy(int startRow, int startCol, int rows, int cols) {
-    final visited = <int>{_key(startRow, startCol)};
-    final wave1 = <int>[];
-
-    for (final d in _deltas) {
-      final nr = startRow + d[0];
-      final nc = startCol + d[1];
+    for (final (nr, nc) in hexNeighbors(row, col)) {
       if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
-      final nk = _key(nr, nc);
-      if (visited.add(nk)) wave1.add(nk);
+      if (visited.add(_key(nr, nc))) wave1.add((nr, nc));
     }
-
-    for (final nk in wave1) {
-      final r = nk ~/ _stride;
-      final c = nk % _stride;
-      _applyBoost(r, c, _primaryBoost, rows, cols);
-    }
-
-    for (final nk in wave1) {
-      final r = nk ~/ _stride;
-      final c = nk % _stride;
-      for (final d in _deltas) {
-        final nr = r + d[0];
-        final nc = c + d[1];
+    for (final (r1, c1) in wave1) {
+      _applyBoost(r1, c1, _wave1Boost, rows, cols);
+      for (final (nr, nc) in hexNeighbors(r1, c1)) {
         if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
-        final nnk = _key(nr, nc);
-        if (visited.add(nnk)) {
-          _applyBoost(nr, nc, _secondaryBoost, rows, cols);
-        }
+        if (visited.add(_key(nr, nc))) wave2.add((nr, nc));
       }
+    }
+    for (final (r2, c2) in wave2) {
+      _applyBoost(r2, c2, _wave2Boost, rows, cols);
     }
   }
 
   // ---- ticker ----------------------------------------------------------------
 
   void _ensureTicker() {
-    _lastTickMs = _clock.elapsedMilliseconds;
+    _lastTickMs = _now;
     _ticker?.cancel();
     _ticker = Timer.periodic(const Duration(milliseconds: 16), (_) {
-      final now = _clock.elapsedMilliseconds;
+      final now = _now;
       final elapsed = now - _lastTickMs;
       _lastTickMs = now;
 
@@ -185,10 +112,8 @@ class GridState extends ChangeNotifier {
       _energy.updateAll((_, v) => (v - decay).clamp(0.0, 1.0));
       _energy.removeWhere((_, v) => v == 0.0);
 
-      _flashStart.removeWhere((_, t) => now - t > _flashDurationMs + 100);
-
       notifyListeners();
-      if (_energy.isEmpty && _flashStart.isEmpty) {
+      if (_energy.isEmpty) {
         _ticker?.cancel();
         _ticker = null;
       }

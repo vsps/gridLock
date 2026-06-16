@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'audio/audio_service.dart';
-import 'audio/record_service.dart';
+import 'clock/clock_service.dart';
 import 'grid/grid_state.dart';
 import 'models/grid_settings.dart';
 import 'screens/play_screen.dart';
@@ -23,12 +23,9 @@ class GridLockApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => GridSettings()),
         ChangeNotifierProvider(create: (_) => GridState()),
         ChangeNotifierProvider(create: (_) => KioskService()),
+        ChangeNotifierProvider(create: (_) => ClockService()),
         Provider(
           create: (_) => AudioService(),
-          dispose: (_, service) => service.dispose(),
-        ),
-        Provider(
-          create: (_) => RecordService(),
           dispose: (_, service) => service.dispose(),
         ),
       ],

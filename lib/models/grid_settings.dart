@@ -1,56 +1,25 @@
 import 'package:flutter/foundation.dart';
 
-/// Sound source for the grid pads.
-enum SoundSource {
-  /// Synthesised pentatonic tones (default).
-  synth,
-
-  /// Pre-recorded WAV samples loaded from assets/samples/.
-  samples,
-
-  /// Long-press to record a rolling 1s loop (no playback in this mode).
-  record,
-
-  /// Tap to play back recordings made in record mode.
-  playback,
-}
-
-/// Parent-configurable grid settings.
 class GridSettings extends ChangeNotifier {
-  GridSettings({int rows = 5, int cols = 4})
-      : _rows = rows.clamp(minDim, maxDim),
-        _cols = cols.clamp(minDim, maxDim);
+  int _bpm = 128;
+  int _zoom = 5; // 1–9; hexRadius = zoom * 10 dp
 
-  static const int minDim = 3;
-  static const int maxDim = 8;
+  int get bpm => _bpm;
+  int get zoom => _zoom;
+  double get hexRadius => _zoom * 10.0;
 
-  int _rows;
-  int _cols;
-  SoundSource _soundSource = SoundSource.synth;
-
-  int get rows => _rows;
-  int get cols => _cols;
-  SoundSource get soundSource => _soundSource;
-
-  void setRows(int value) {
-    final v = value.clamp(minDim, maxDim);
-    if (v != _rows) {
-      _rows = v;
+  void setBpm(int v) {
+    final clamped = v.clamp(60, 200);
+    if (clamped != _bpm) {
+      _bpm = clamped;
       notifyListeners();
     }
   }
 
-  void setCols(int value) {
-    final v = value.clamp(minDim, maxDim);
-    if (v != _cols) {
-      _cols = v;
-      notifyListeners();
-    }
-  }
-
-  void setSoundSource(SoundSource source) {
-    if (source != _soundSource) {
-      _soundSource = source;
+  void setZoom(int v) {
+    final clamped = v.clamp(1, 9);
+    if (clamped != _zoom) {
+      _zoom = clamped;
       notifyListeners();
     }
   }

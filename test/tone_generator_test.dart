@@ -6,7 +6,7 @@ import 'package:gridlock/audio/tone_generator.dart';
 void main() {
   group('ToneGenerator.generateWav', () {
     test('produces a well-formed 44.1kHz mono 16-bit WAV header', () {
-      final bytes = ToneGenerator.generateWav(440.0, durationMs: 100);
+      final bytes = ToneGenerator.generateWav(440.0, baseDurationMs: 100);
       final view = ByteData.sublistView(bytes);
 
       String tag(int offset) => String.fromCharCodes(bytes.sublist(offset, offset + 4));
@@ -23,7 +23,7 @@ void main() {
 
     test('sample count and data size match the requested duration', () {
       const durationMs = 100;
-      final bytes = ToneGenerator.generateWav(440.0, durationMs: durationMs);
+      final bytes = ToneGenerator.generateWav(440.0, baseDurationMs: durationMs);
       final view = ByteData.sublistView(bytes);
 
       const expectedSamples = 44100 * durationMs ~/ 1000;
