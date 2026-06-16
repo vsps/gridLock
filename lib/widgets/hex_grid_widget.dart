@@ -348,13 +348,13 @@ class _HexGridPainter extends CustomPainter {
         }
 
         final sem = HarmonicTable.semitones(row, col, lay.refRow, lay.refCol);
-        final energy = gridState.cellEnergy(row, col);
+        final color = gridState.cellColor(row, col);
         final key = row * 1000 + col;
 
         canvas.save();
         canvas.translate(cx - lay.hexR, cy - lay.hexR);
         HexCellPainter(
-          energy: energy,
+          activeColor: color,
           semitones: sem,
           hexRadius: lay.hexR,
           isHeld: heldKeys.contains(key),

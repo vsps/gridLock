@@ -1,30 +1,58 @@
 import 'dart:async';
+import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 
 class _CellAnim {
-  const _CellAnim({required this.waveStartMs, required this.peak});
-  final int waveStartMs; // stopwatch ms when fade-in begins
-  final double peak;     // max energy (1.0 at ring 0, -10% per ring)
+  const _CellAnim({
+    required this.fadeInStartMs,
+    required this.fadeOutStartMs,
+    required this.peak,
+    required this.hue,
+  });
+
+  final int fadeInStartMs;
+  final int fadeOutStartMs; // when fade-out begins (after hold at peak)
+  final double peak;
+  final double hue; // HSV hue 0–360
+
+  static const int fadeInMs = 80;
+  static const int fadeOutMs = 2000;
+
+  double energyAt(int nowMs) {
+    final sinceIn = nowMs - fadeInStartMs;
+    if (sinceIn < 0) return 0;
+    if (sinceIn < fadeInMs) return peak * sinceIn / fadeInMs;
+    final sinceFadeOut = nowMs - fadeOutStartMs;
+    if (sinceFadeOut < 0) return peak; // holding at peak
+    if (sinceFadeOut >= fadeOutMs) return 0;
+    return peak * (1.0 - sinceFadeOut / fadeOutMs);
+  }
+
+  bool isDone(int nowMs) => nowMs >= fadeOutStartMs + fadeOutMs;
 }
 
-/// Wave-based energy model.
+/// Wave-based energy model with random hue per trigger and FIFO fade-out.
 ///
-/// Each trigger BFS-propagates across the whole grid. Ring N starts fading in
-/// once ring N-1 reaches full brightness (i.e., after N × fadeInMs). Each ring
-/// is 10 % dimmer than the previous. Fade-in is fast; fade-out is slow (2 s).
+/// On each trigger:
+/// - Rings fade IN from centre outward (cascade, 80 ms per ring).
+/// - Once all rings are full, rings fade OUT from centre outward too
+///   (150 ms stagger per ring), so the ripple dims as it expands.
+/// - Each trigger gets a random HSV hue — cellColor() returns the blended Color.
 class GridState extends ChangeNotifier {
   GridState() : _clock = Stopwatch()..start();
 
   static const int _stride = 64;
-  static const int _fadeInMs = 80;
-  static const int _fadeOutMs = 2000;
   static const double _dimPerRing = 0.10;
   static const double _minPeak = 0.05;
+  static const int _fadeOutStagger = 150; // ms between successive rings fading out
+
+  static const Color _offColor = Color(0xFF101018);
 
   final Map<int, _CellAnim> _anims = {};
   final Stopwatch _clock;
   Timer? _ticker;
+  final math.Random _rng = math.Random();
 
   int _key(int row, int col) => row * _stride + col;
   int get _now => _clock.elapsedMilliseconds;
@@ -32,9 +60,7 @@ class GridState extends ChangeNotifier {
   // ---- slide dedup -----------------------------------------------------------
 
   int _lastPadKey = -1;
-
   void beginSwipe() => _lastPadKey = -1;
-
   bool tryClaimPad(int row, int col) {
     final k = _key(row, col);
     if (k == _lastPadKey) return false;
@@ -44,21 +70,31 @@ class GridState extends ChangeNotifier {
 
   // ---- public API ------------------------------------------------------------
 
-  double cellEnergy(int row, int col) => _energyAt(_anims[_key(row, col)], _now);
+  /// Blended fill colour for the cell, or null when the cell is at rest.
+  Color? cellColor(int row, int col) {
+    final anim = _anims[_key(row, col)];
+    if (anim == null) return null;
+    final energy = anim.energyAt(_now);
+    if (energy <= 0) return null;
+    final base = HSVColor.fromAHSV(1.0, anim.hue, 1.0, 1.0).toColor();
+    return Color.lerp(_offColor, base, energy);
+  }
 
-  /// Trigger a wave from ([row],[col]), propagating across the whole [rows]×[cols] grid.
+  /// Trigger a full-board wave from ([row],[col]).
+  /// Assigns a fresh random hue to every cell touched by this ripple.
   void trigger(int row, int col, int rows, int cols) {
     final now = _now;
+    final hue = _rng.nextDouble() * 360;
 
-    // BFS — record each cell's ring depth from the trigger point.
-    final depth = <int, int>{};
+    // BFS — depth of every reachable cell.
+    final depths = <int, int>{};
     final queue = <(int, int, int)>[];
 
     void enqueue(int r, int c, int d) {
       if (r < 0 || r >= rows || c < 0 || c >= cols) return;
       final k = _key(r, c);
-      if (depth.containsKey(k)) return;
-      depth[k] = d;
+      if (depths.containsKey(k)) return;
+      depths[k] = d;
       queue.add((r, c, d));
     }
 
@@ -71,17 +107,28 @@ class GridState extends ChangeNotifier {
       }
     }
 
-    // Apply animations — only update a cell if the new wave is brighter at the
-    // moment it would peak than whatever is already scheduled.
-    for (final entry in depth.entries) {
+    // Fade-out starts only after ALL rings have reached peak, then staggers
+    // outward — so the centre begins fading before the outer rings.
+    final maxDepth = depths.values.fold(0, math.max);
+    final allPeakMs = now + (maxDepth + 1) * _CellAnim.fadeInMs;
+
+    for (final entry in depths.entries) {
       final k = entry.key;
       final d = entry.value;
-      final waveStart = now + d * _fadeInMs;
+      final fadeInStart = now + d * _CellAnim.fadeInMs;
+      final fadeOutStart = allPeakMs + d * _fadeOutStagger;
       final peak = (1.0 - d * _dimPerRing).clamp(_minPeak, 1.0);
-      final peakTime = waveStart + _fadeInMs;
+
+      // Update only if this trigger would be brighter at the new peak moment.
       final existing = _anims[k];
-      if (existing == null || peak > _energyAt(existing, peakTime)) {
-        _anims[k] = _CellAnim(waveStartMs: waveStart, peak: peak);
+      if (existing == null ||
+          peak >= existing.energyAt(fadeInStart + _CellAnim.fadeInMs)) {
+        _anims[k] = _CellAnim(
+          fadeInStartMs: fadeInStart,
+          fadeOutStartMs: fadeOutStart,
+          peak: peak,
+          hue: hue,
+        );
       }
     }
 
@@ -107,25 +154,13 @@ class GridState extends ChangeNotifier {
     }
   }
 
-  // ---- helpers ---------------------------------------------------------------
-
-  static double _energyAt(_CellAnim? anim, int nowMs) {
-    if (anim == null) return 0;
-    final elapsed = nowMs - anim.waveStartMs;
-    if (elapsed < 0) return 0;
-    if (elapsed < _fadeInMs) return anim.peak * elapsed / _fadeInMs;
-    final decay = elapsed - _fadeInMs;
-    if (decay >= _fadeOutMs) return 0;
-    return anim.peak * (1.0 - decay / _fadeOutMs);
-  }
-
   // ---- ticker ----------------------------------------------------------------
 
   void _ensureTicker() {
     _ticker?.cancel();
     _ticker = Timer.periodic(const Duration(milliseconds: 16), (_) {
       final now = _now;
-      _anims.removeWhere((_, a) => now - a.waveStartMs >= _fadeInMs + _fadeOutMs);
+      _anims.removeWhere((_, a) => a.isDone(now));
       notifyListeners();
       if (_anims.isEmpty) {
         _ticker?.cancel();
